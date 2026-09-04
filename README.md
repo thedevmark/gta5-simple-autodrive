@@ -16,8 +16,8 @@ Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing auto
 | Tier | Speed | Style |
 |---|---|---|
 | Cruise | ~61 km/h | civil — stops at lights, yields |
-| Hurried (default) | ~94 km/h | rushed — lights are suggestions |
-| Insane | ~130 km/h | rushed — good luck |
+| Hurried (default) | ~94 km/h | SHVDN Rushed — passes slow traffic |
+| Insane | ~130 km/h | Rushed + wrong-way-when-blocked — overtakes through the oncoming lane |
 
 Every speed and style is editable in the ini.
 
@@ -62,8 +62,8 @@ SpeedCruise=17.0    # meters per second (km/h = value x 3.6)
 SpeedHurried=26.0
 SpeedInsane=36.0
 StyleCruise=786603  # civil (stops at lights) / rushed (does not)
-StyleHurried=2883621
-StyleInsane=2883621
+StyleHurried=1074528293
+StyleInsane=1074528805
 StopRange=15.0      # meters to destination to count as arrived
 ```
 
@@ -80,6 +80,10 @@ csc -target:library -platform:x64 -optimize+ -out:SimpleAutoDrive.dll
 ```
 
 Reference the ScriptHookVDotNet3.dll from the game you'll run it on. Any Roslyn compiler works (Visual Studio 2022's `csc.exe`, or `dotnet build` after wrapping the source in a project); the ancient .NET Framework compiler that ships with Windows also handles this source.
+
+## Driving style values
+
+The defaults are presets from the community's [driving-styles reference](https://gtaforums.com/topic/822314-guide-driving-styles/) — `786603` civil, `1074528293` the real SHVDN "Rushed" (brakes near moving cars but passes them), `1074528805` adds bit 512, which allows using the oncoming lane when your lane is blocked. The old `2883621` you'll see in other mods ignores lights but mostly *queues* behind traffic — that's the value this mod replaced after its author watched it politely follow a van for three miles. Compose your own with the [driving style calculator](https://vespura.com/fivem/drivingstyle/).
 
 ## Notes
 

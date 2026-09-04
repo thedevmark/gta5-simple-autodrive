@@ -39,8 +39,8 @@ public class SimpleAutoDrive : Script
         _speeds[1] = cfg.GetValue("MAIN", "SpeedHurried", 26.0f);
         _speeds[2] = cfg.GetValue("MAIN", "SpeedInsane", 36.0f);
         _styles[0] = cfg.GetValue("MAIN", "StyleCruise", 786603);   // civil
-        _styles[1] = cfg.GetValue("MAIN", "StyleHurried", 2883621); // rushed
-        _styles[2] = cfg.GetValue("MAIN", "StyleInsane", 2883621);  // rushed
+        _styles[1] = cfg.GetValue("MAIN", "StyleHurried", 1074528293);  // SHVDN Rushed: brakes near cars but passes them
+        _styles[2] = cfg.GetValue("MAIN", "StyleInsane", 1074528805);   // Rushed + wrong-way-when-blocked
         _tier = cfg.GetValue("MAIN", "DefaultTier", 1);             // Hurried
         if (_tier < 0 || _tier > 2) _tier = 1;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
