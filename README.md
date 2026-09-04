@@ -91,6 +91,7 @@ The defaults are presets from the community's [driving-styles reference](https:/
 - **Story Mode only.** Never run mods in GTA Online.
 - The notification API used (`Notification.Show`) is marked obsolete in recent SHVDN nightlies but works fine; swap to `Notification.PostTicker` if your build warns louder than mine.
 - Why tiers are a second tap key instead of a hold key: vanilla GTA binds **hold-F6 to the character switch wheel**, so any hold on F6 fights the game. Learned the hard way; kept the note so you don't retry it.
+- GTA's notification parser treats `~` as a formatting escape character; two stray tildes in one string pair up and swallow the text between them. Tier labels therefore contain no tildes. Learned from "Cruise ( Insane (".
 - Conflict check before filing issues: another mod bound to F6 will fight for the key. Rename yours in the ini.
 
 ## License

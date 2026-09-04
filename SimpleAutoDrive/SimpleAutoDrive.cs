@@ -153,7 +153,7 @@ public class SimpleAutoDrive : Script
 
     string TierLabel()
     {
-        return TierNames[_tier] + " (~" + (int)(_speeds[_tier] * 3.6) + " km/h)";
+        return TierNames[_tier] + " (" + (int)(_speeds[_tier] * 3.6) + " km/h)";
     }
 
     Vector3 WaypointPos()
