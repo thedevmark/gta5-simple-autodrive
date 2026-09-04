@@ -7,10 +7,12 @@ using GTA.Native;
 using GTA.UI;
 
 // SimpleAutoDrive - one-key waypoint autopilot for GTA V Enhanced (SHVDN3).
-// Tap the toggle key to start/stop; HOLD it 2 seconds to cycle the
-// aggression tier (Cruise / Hurried / Insane). The drive task is reissued
-// every 2s from the car's current position so it can never follow a stale
-// route. Tier changes apply immediately, even mid-drive.
+// Tap F6 to start/stop, tap F9 to cycle the aggression tier
+// (Cruise / Hurried / Insane; applies immediately, even mid-drive).
+// Tier is a tap key, not a hold key: vanilla GTA binds hold-F6 to the
+// character switch wheel, so holds on F6 fight the game.
+// The drive task is reissued every 2s from the car's current position
+// so it can never follow a stale route.
 public class SimpleAutoDrive : Script
 {
     static readonly string[] TierNames = { "Cruise", "Hurried", "Insane" };
@@ -18,26 +20,20 @@ public class SimpleAutoDrive : Script
     bool _on;
     Vector3 _target;
     Keys _toggle;
+    Keys _tierKey;
     int _tier;
     readonly float[] _speeds = new float[3];
     readonly int[] _styles = new int[3];
     float _stopRange;
     DateTime _lastTask = DateTime.MinValue;
 
-    // key state machine: tap = toggle, hold 2s = cycle tier
-    bool _keyDown;
-    DateTime _keyDownAt;
-    bool _holdFired;
-
     public SimpleAutoDrive()
     {
         string iniPath = Path.Combine("scripts", "SimpleAutoDrive.ini");
         ScriptSettings cfg = ScriptSettings.Load(iniPath);
 
-        string key = cfg.GetValue("MAIN", "ToggleKey", "F6");
-        Keys parsed;
-        if (!Enum.TryParse(key, true, out parsed)) parsed = Keys.F6;
-        _toggle = parsed;
+        _toggle = ParseKey(cfg.GetValue("MAIN", "ToggleKey", "F6"), Keys.F6);
+        _tierKey = ParseKey(cfg.GetValue("MAIN", "TierKey", "F9"), Keys.F9);
 
         _speeds[0] = cfg.GetValue("MAIN", "SpeedCruise", 17.0f);
         _speeds[1] = cfg.GetValue("MAIN", "SpeedHurried", 26.0f);
@@ -50,6 +46,7 @@ public class SimpleAutoDrive : Script
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
 
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
+        cfg.SetValue("MAIN", "TierKey", _tierKey.ToString());
         cfg.SetValue("MAIN", "SpeedCruise", _speeds[0]);
         cfg.SetValue("MAIN", "SpeedHurried", _speeds[1]);
         cfg.SetValue("MAIN", "SpeedInsane", _speeds[2]);
@@ -62,38 +59,26 @@ public class SimpleAutoDrive : Script
 
         Interval = 250;
         KeyDown += OnKeyDown;
-        KeyUp += OnKeyUp;
         Tick += OnTick;
         Aborted += OnAborted;
     }
 
-    void OnKeyDown(object sender, KeyEventArgs e)
+    static Keys ParseKey(string name, Keys fallback)
     {
-        if (e.KeyCode != _toggle) return;
-        _keyDown = true;
-        _keyDownAt = DateTime.UtcNow;
-        _holdFired = false;
+        Keys k;
+        return Enum.TryParse(name, true, out k) ? k : fallback;
     }
 
-    void OnKeyUp(object sender, KeyEventArgs e)
+    void OnKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.KeyCode != _toggle || !_keyDown) return;
-        _keyDown = false;
-        if (_holdFired) return; // the hold already acted
-        if ((DateTime.UtcNow - _keyDownAt).TotalSeconds < 2.0)
+        if (e.KeyCode == _toggle)
             ToggleAutopilot();
+        else if (e.KeyCode == _tierKey)
+            CycleTier();
     }
 
     void OnTick(object sender, EventArgs e)
     {
-        // hold detection
-        if (_keyDown && !_holdFired &&
-            (DateTime.UtcNow - _keyDownAt).TotalSeconds >= 2.0)
-        {
-            _holdFired = true;
-            CycleTier();
-        }
-
         if (!_on) return;
 
         Ped p = Game.Player.Character;

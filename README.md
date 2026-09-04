@@ -9,7 +9,7 @@ Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing auto
 | Input | Action |
 |---|---|
 | Tap F6 | autopilot on / off |
-| Hold F6 (2 s) | cycle aggression tier — applies immediately, even mid-drive |
+| Tap F9 | cycle aggression tier — applies immediately, even mid-drive |
 
 ## Aggression tiers
 
@@ -31,7 +31,7 @@ The drive command is reissued **every 2 seconds from the car's current position*
 |---|---|
 | F6 tapped, waypoint set, you're driving | autopilot on, notification shows tier and speed |
 | F6 tapped again | autopilot off |
-| F6 held 2 s | next tier (Cruise → Hurried → Insane → Cruise) |
+| F9 tapped | next tier (Cruise → Hurried → Insane → Cruise) |
 | Car reaches the waypoint | hard stop, "Arrived", control returned |
 | You leave the driver's seat | autopilot ends cleanly |
 | Scripts reloaded (Insert) | task cleared, never left running under you |
@@ -56,6 +56,7 @@ The drive command is reissued **every 2 seconds from the car's current position*
 ```ini
 [MAIN]
 ToggleKey=F6        # any System.Windows.Forms.Keys name
+TierKey=F9          # tap to cycle aggression tier
 DefaultTier=1       # 0 Cruise / 1 Hurried / 2 Insane - tier at startup
 SpeedCruise=17.0    # meters per second (km/h = value x 3.6)
 SpeedHurried=26.0
@@ -84,6 +85,7 @@ Reference the ScriptHookVDotNet3.dll from the game you'll run it on. Any Roslyn 
 
 - **Story Mode only.** Never run mods in GTA Online.
 - The notification API used (`Notification.Show`) is marked obsolete in recent SHVDN nightlies but works fine; swap to `Notification.PostTicker` if your build warns louder than mine.
+- Why tiers are a second tap key instead of a hold key: vanilla GTA binds **hold-F6 to the character switch wheel**, so any hold on F6 fights the game. Learned the hard way; kept the note so you don't retry it.
 - Conflict check before filing issues: another mod bound to F6 will fight for the key. Rename yours in the ini.
 
 ## License
