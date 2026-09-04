@@ -65,6 +65,7 @@ StyleCruise=786603  # civil (stops at lights) / rushed (does not)
 StyleHurried=1074528293
 StyleInsane=1074528805
 StopRange=15.0      # meters to destination to count as arrived
+TaskIntervalMs=4500  # route recalculation cadence; lower = reconsiders more often
 ```
 
 Edits apply on the next script reload (Insert by default in ScriptHookVDotNet).

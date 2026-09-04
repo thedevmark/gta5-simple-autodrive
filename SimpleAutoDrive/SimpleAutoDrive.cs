@@ -25,6 +25,7 @@ public class SimpleAutoDrive : Script
     readonly float[] _speeds = new float[3];
     readonly int[] _styles = new int[3];
     float _stopRange;
+    int _taskIntervalMs;
     DateTime _lastTask = DateTime.MinValue;
 
     public SimpleAutoDrive()
@@ -44,6 +45,7 @@ public class SimpleAutoDrive : Script
         _tier = cfg.GetValue("MAIN", "DefaultTier", 1);             // Hurried
         if (_tier < 0 || _tier > 2) _tier = 1;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
+        _taskIntervalMs = cfg.GetValue("MAIN", "TaskIntervalMs", 4500);
 
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
         cfg.SetValue("MAIN", "TierKey", _tierKey.ToString());
@@ -55,6 +57,7 @@ public class SimpleAutoDrive : Script
         cfg.SetValue("MAIN", "StyleInsane", _styles[2]);
         cfg.SetValue("MAIN", "DefaultTier", _tier);
         cfg.SetValue("MAIN", "StopRange", _stopRange);
+        cfg.SetValue("MAIN", "TaskIntervalMs", _taskIntervalMs);
         cfg.Save();
 
         Interval = 250;
@@ -98,7 +101,7 @@ public class SimpleAutoDrive : Script
             return;
         }
 
-        if ((DateTime.UtcNow - _lastTask).TotalMilliseconds > 2000)
+        if ((DateTime.UtcNow - _lastTask).TotalMilliseconds > _taskIntervalMs)
             Retask();
     }
 
