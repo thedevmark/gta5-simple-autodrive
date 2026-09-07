@@ -31,6 +31,8 @@ public class SimpleAutoDrive : Script
     DateTime _lastProgressAt = DateTime.MinValue;
     DateTime _stuckSince = DateTime.MinValue;
     Vector3 _knownWaypoint = Vector3.Zero;
+    int _noProgressRetasks;
+    float _distAtLastRetask = -1f;
 
     public SimpleAutoDrive()
     {
@@ -145,15 +147,20 @@ public class SimpleAutoDrive : Script
         }
         else _stuckSince = DateTime.MinValue;
 
-        if (_bestDist < 0f || dist < _bestDist - 8.0f)
+        if (_bestDist < 0f || dist < _bestDist - 5.0f)
         {
             _bestDist = dist;
             _lastProgressAt = DateTime.UtcNow;
+            if (_distAtLastRetask - dist > 40.0f) _noProgressRetasks = 0;
         }
-        if ((DateTime.UtcNow - _lastProgressAt).TotalSeconds > 15.0)
+        if ((DateTime.UtcNow - _lastProgressAt).TotalSeconds > 25.0)
         {
-            // 15s without getting 8m closer: genuinely losing ground, not a legit detour
-            Retask();
+            // 25s without getting 5m closer. City routes legitimately wander sideways
+            // for a while; 25s/5m only trips on genuinely losing ground or looping.
+            _noProgressRetasks++;
+            bool looped = _noProgressRetasks >= 3;
+            Retask(looped);
+            if (looped) _noProgressRetasks = 0;
             _bestDist = -1f;
         }
 
@@ -221,7 +228,7 @@ public class SimpleAutoDrive : Script
         return Function.Call<Vector3>(Hash.GET_BLIP_INFO_ID_COORD, blip);
     }
 
-    void Retask()
+    void Retask(bool loopBreaker = false)
     {
         Vector3 t = WaypointPos();
         if (t == Vector3.Zero)
@@ -242,8 +249,17 @@ public class SimpleAutoDrive : Script
         if (v == null || !v.Exists()) { Stop(); return; }
 
         _lastTask = DateTime.UtcNow;
+        _distAtLastRetask = p.Position.DistanceTo(_target);
+
+        // Loop breaker: three no-progress re-issues in a row means the route or the
+        // aggressive style itself is circling. Drop to civil style for one task -
+        // the wrong-way-when-blocked bit is the usual junction-circling culprit.
+        int style = loopBreaker ? 786603 : _styles[_tier];
+        if (loopBreaker)
+            Notification.Show("~y~AutoDrive: rerouting (loop detected)");
+
         Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, p, v,
-            _target.X, _target.Y, _target.Z, _speeds[_tier], _styles[_tier], _stopRange);
+            _target.X, _target.Y, _target.Z, _speeds[_tier], style, _stopRange);
     }
 
     void Stop()
