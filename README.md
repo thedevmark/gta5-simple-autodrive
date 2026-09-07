@@ -20,6 +20,8 @@ Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing auto
 | Hurried (default) | ~94 km/h | Rushed + wrong-way-when-blocked |
 | Insane | ~130 km/h | + overtake-left/right bits — crosses into the oncoming lane to pass, single-lane roads included |
 
+Notifications show the tier name only; speeds live in the ini.
+
 Every speed and style is editable in the ini.
 
 ## Destinations

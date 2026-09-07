@@ -46,14 +46,16 @@ public class SimpleAutoDrive : Script
         _toggle = ParseKey(cfg.GetValue("MAIN", "ToggleKey", "F6"), Keys.F6);
         _tierKey = ParseKey(cfg.GetValue("MAIN", "TierKey", "F9"), Keys.F9);
 
-        _speeds[0] = cfg.GetValue("MAIN", "SpeedCruise", 17.0f);
-        _speeds[1] = cfg.GetValue("MAIN", "SpeedHurried", 26.0f);
-        _speeds[2] = cfg.GetValue("MAIN", "SpeedInsane", 36.0f);
-        _styles[0] = cfg.GetValue("MAIN", "StyleCruise", 786603);   // civil
-        _styles[1] = cfg.GetValue("MAIN", "StyleHurried", 1074528805);   // Rushed + wrong-way-when-blocked
-        _styles[2] = cfg.GetValue("MAIN", "StyleInsane", 1074534949);   // + wrong-way + overtake-left/right bits (2048|4096)
-        _tier = cfg.GetValue("MAIN", "DefaultTier", 1);             // Hurried
-        if (_tier < 0 || _tier > 2) _tier = 1;
+        _speeds[0] = cfg.GetValue("MAIN", "SpeedCruise", 16.0f);
+        _speeds[1] = cfg.GetValue("MAIN", "SpeedBrisk", 21.0f);
+        _speeds[2] = cfg.GetValue("MAIN", "SpeedHurried", 26.0f);
+        _speeds[3] = cfg.GetValue("MAIN", "SpeedInsane", 36.0f);
+        _styles[0] = cfg.GetValue("MAIN", "StyleCruise", 786603);      // civil
+        _styles[1] = cfg.GetValue("MAIN", "StyleBrisk", 1074528293);   // SHVDN Rushed
+        _styles[2] = cfg.GetValue("MAIN", "StyleHurried", 1074528805); // + wrong-way-when-blocked
+        _styles[3] = cfg.GetValue("MAIN", "StyleInsane", 1074534949);  // + overtake bits
+        _tier = cfg.GetValue("MAIN", "DefaultTier", 2);                // Hurried
+        if (_tier < 0 || _tier > 3) _tier = 2;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
         _overtake = cfg.GetValue("MAIN", "Overtake", 1) == 1;
         _taskIntervalMs = cfg.GetValue("MAIN", "TaskIntervalMs", 0); // 0 = off; any heartbeat is a periodic mid-maneuver reset
@@ -271,7 +273,7 @@ public class SimpleAutoDrive : Script
 
     string TierLabel()
     {
-        return TierNames[_tier] + " (" + (int)(_speeds[_tier] * 3.6) + " km/h)";
+        return TierNames[_tier];
     }
 
     Vector3 WaypointPos()
