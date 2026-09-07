@@ -16,7 +16,7 @@ Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing auto
 | Tier | Speed | Style |
 |---|---|---|
 | Cruise | ~61 km/h | civil — stops at lights, yields |
-| Hurried (default) | ~94 km/h | SHVDN Rushed — passes slow traffic |
+| Hurried (default) | ~94 km/h | Rushed + wrong-way-when-blocked — passes slow traffic |
 | Insane | ~130 km/h | Rushed + wrong-way-when-blocked — overtakes through the oncoming lane |
 
 Every speed and style is editable in the ini.
@@ -65,7 +65,7 @@ StyleCruise=786603  # civil (stops at lights) / rushed (does not)
 StyleHurried=1074528293
 StyleInsane=1074528805
 StopRange=15.0      # meters to destination to count as arrived
-TaskIntervalMs=4500  # route recalculation cadence; lower = reconsiders more often
+TaskIntervalMs=0     # 0 = off; a periodic heartbeat reissue resets maneuvers mid-flight
 ```
 
 Edits apply on the next script reload (Insert by default in ScriptHookVDotNet).

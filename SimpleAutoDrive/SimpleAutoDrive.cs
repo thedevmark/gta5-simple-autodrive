@@ -44,12 +44,12 @@ public class SimpleAutoDrive : Script
         _speeds[1] = cfg.GetValue("MAIN", "SpeedHurried", 26.0f);
         _speeds[2] = cfg.GetValue("MAIN", "SpeedInsane", 36.0f);
         _styles[0] = cfg.GetValue("MAIN", "StyleCruise", 786603);   // civil
-        _styles[1] = cfg.GetValue("MAIN", "StyleHurried", 1074528293);  // SHVDN Rushed: brakes near cars but passes them
+        _styles[1] = cfg.GetValue("MAIN", "StyleHurried", 1074528805);   // Rushed + wrong-way-when-blocked
         _styles[2] = cfg.GetValue("MAIN", "StyleInsane", 1074528805);   // Rushed + wrong-way-when-blocked
         _tier = cfg.GetValue("MAIN", "DefaultTier", 1);             // Hurried
         if (_tier < 0 || _tier > 2) _tier = 1;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
-        _taskIntervalMs = cfg.GetValue("MAIN", "TaskIntervalMs", 15000); // heartbeat only - see OnTick
+        _taskIntervalMs = cfg.GetValue("MAIN", "TaskIntervalMs", 0); // 0 = off; any heartbeat is a periodic mid-maneuver reset
 
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
         cfg.SetValue("MAIN", "TierKey", _tierKey.ToString());
@@ -64,8 +64,9 @@ public class SimpleAutoDrive : Script
         cfg.SetValue("MAIN", "TaskIntervalMs", _taskIntervalMs);
         cfg.Save();
 
-        Interval = 250;
+        Interval = 100;
         KeyDown += OnKeyDown;
+        KeyUp += OnKeyUp;
         Tick += OnTick;
         Aborted += OnAborted;
     }
@@ -76,12 +77,28 @@ public class SimpleAutoDrive : Script
         return Enum.TryParse(name, true, out k) ? k : fallback;
     }
 
+    readonly bool[] _keyLatched = new bool[2]; // [0]=toggle, [1]=tier; one action per physical press
+
     void OnKeyDown(object sender, KeyEventArgs e)
     {
         if (e.KeyCode == _toggle)
+        {
+            if (_keyLatched[0]) return;
+            _keyLatched[0] = true;
             ToggleAutopilot();
+        }
         else if (e.KeyCode == _tierKey)
+        {
+            if (_keyLatched[1]) return;
+            _keyLatched[1] = true;
             CycleTier();
+        }
+    }
+
+    void OnKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.KeyCode == _toggle) _keyLatched[0] = false;
+        else if (e.KeyCode == _tierKey) _keyLatched[1] = false;
     }
 
     void OnTick(object sender, EventArgs e)
@@ -120,7 +137,7 @@ public class SimpleAutoDrive : Script
         if (v.Speed < 2.0f)
         {
             if (_stuckSince == DateTime.MinValue) _stuckSince = DateTime.UtcNow;
-            else if ((DateTime.UtcNow - _stuckSince).TotalSeconds > 6.0)
+            else if ((DateTime.UtcNow - _stuckSince).TotalSeconds > 12.0)
             {
                 Retask();
                 _stuckSince = DateTime.UtcNow;
@@ -133,14 +150,15 @@ public class SimpleAutoDrive : Script
             _bestDist = dist;
             _lastProgressAt = DateTime.UtcNow;
         }
-        if ((DateTime.UtcNow - _lastProgressAt).TotalSeconds > 10.0)
+        if ((DateTime.UtcNow - _lastProgressAt).TotalSeconds > 15.0)
         {
-            // 10s without getting 8m closer to the destination: wrong way or boxed in
+            // 15s without getting 8m closer: genuinely losing ground, not a legit detour
             Retask();
             _bestDist = -1f;
         }
 
-        if ((DateTime.UtcNow - _lastTask).TotalMilliseconds > _taskIntervalMs)
+        if (_taskIntervalMs > 0 &&
+            (DateTime.UtcNow - _lastTask).TotalMilliseconds > _taskIntervalMs)
             Retask();
     }
 
