@@ -33,6 +33,10 @@ public class SimpleAutoDrive : Script
     Vector3 _knownWaypoint = Vector3.Zero;
     int _noProgressRetasks;
     float _distAtLastRetask = -1f;
+    bool _overtake;
+    bool _passing;
+    Vector3 _passTarget;
+    DateTime _passStart;
 
     public SimpleAutoDrive()
     {
@@ -51,6 +55,7 @@ public class SimpleAutoDrive : Script
         _tier = cfg.GetValue("MAIN", "DefaultTier", 1);             // Hurried
         if (_tier < 0 || _tier > 2) _tier = 1;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
+        _overtake = cfg.GetValue("MAIN", "Overtake", 1) == 1;
         _taskIntervalMs = cfg.GetValue("MAIN", "TaskIntervalMs", 0); // 0 = off; any heartbeat is a periodic mid-maneuver reset
 
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
@@ -65,6 +70,7 @@ public class SimpleAutoDrive : Script
         cfg.SetValue("MAIN", "StyleInsane", _styles[3]);
         cfg.SetValue("MAIN", "DefaultTier", _tier);
         cfg.SetValue("MAIN", "StopRange", _stopRange);
+        cfg.SetValue("MAIN", "Overtake", _overtake ? 1 : 0);
         cfg.SetValue("MAIN", "TaskIntervalMs", _taskIntervalMs);
         cfg.Save();
 
@@ -124,6 +130,52 @@ public class SimpleAutoDrive : Script
             Stop();
             Notification.Show("~g~Arrived");
             return;
+        }
+
+        // Deterministic overtaker: when we sag to a crawl behind a slower
+        // same-direction vehicle, drive directly to a point past it in the
+        // oncoming lane, then resume the waypoint task.
+        if (_overtake)
+        {
+            if (_passing)
+            {
+                bool arrived = p.Position.DistanceTo(_passTarget) < 12.0f;
+                bool timedOut = (DateTime.UtcNow - _passStart).TotalSeconds > 12.0;
+                if (arrived || timedOut)
+                {
+                    _passing = false;
+                    Retask();
+                }
+                return; // pass task owns the car; evidence retasks wait
+            }
+
+            if (v.Speed < _speeds[_tier] * 0.35f)
+            {
+                Vehicle blocker = null;
+                float best = 30.0f;
+                Vector3 fwd = v.ForwardVector;
+                foreach (Vehicle other in World.GetNearbyVehicles(v.Position, 35.0f))
+                {
+                    if (other == null || !other.Exists() || other.Handle == v.Handle) continue;
+                    Vector3 rel = other.Position - v.Position;
+                    float bdist = rel.Length();
+                    if (bdist > 30.0f || bdist < 3.0f) continue;
+                    if (Vector3.Dot(rel.Normalized, fwd) < 0.7f) continue;
+                    if (Vector3.Dot(other.ForwardVector, fwd) < 0.6f) continue;
+                    if (other.Speed > v.Speed + 2.0f) continue;
+                    if (bdist < best) { best = bdist; blocker = other; }
+                }
+                if (blocker != null)
+                {
+                    _passing = true;
+                    _passStart = DateTime.UtcNow;
+                    Vector3 right = Vector3.Cross(fwd, Vector3.WorldUp).Normalized;
+                    _passTarget = blocker.Position + blocker.ForwardVector.Normalized * 35.0f - right * 3.2f;
+                    Function.Call((Hash)0xE2A2AA2F659D77A7, p, v,  // TASK_VEHICLE_DRIVE_TO_COORD, not in SHVDN enum
+                        _passTarget.X, _passTarget.Y, _passTarget.Z,
+                        _speeds[_tier], 1, 0, 1074528805, 2.5f, -1f);
+                }
+            }
         }
 
         // Retask on evidence, not on a blind timer: a timer that fires mid-maneuver
@@ -282,6 +334,7 @@ public class SimpleAutoDrive : Script
     {
         if (!_on) return;
         _on = false;
+        _passing = false;
         Ped p = Game.Player.Character;
         if (p != null && p.Exists())
             Function.Call(Hash.CLEAR_PED_TASKS, p);

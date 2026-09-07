@@ -26,6 +26,10 @@ Every speed and style is editable in the ini.
 
 The player waypoint (purple marker) takes priority. Without one, the mod follows the nearest **mission objective blip farther than 50 m** - so it works during missions, and it re-targets automatically as the objective moves. Contact markers beside you in free roam are ignored via the 50 m rule.
 
+## Deterministic overtaker
+
+Style bits ask the engine nicely; the overtaker doesn't ask. When the car sags below 35% of tier speed behind a slower same-direction vehicle, the mod drives *directly* to a point ~35 m past the blocker in the oncoming lane, then resumes the waypoint task. A pass times out after 12 s and the normal evidence-based logic resumes. Toggle with `Overtake=1/0` in the ini (default on).
+
 ## How it stays on route
 
 The drive command is reissued **every 2 seconds from the car's current position**. There is no cached route to go stale and no wrong way to drive — the task is always "get from here to the waypoint." Arrival (default 15 m) stops the car dead and returns control.
@@ -72,6 +76,7 @@ StyleBrisk=1074528293    # SHVDN Rushed - passes when convenient
 StyleHurried=1074528805  # + wrong-way-when-blocked
 StyleInsane=1074534949   # + overtake-left/right bits
 StopRange=15.0      # meters to destination to count as arrived
+Overtake=1         # 1 = deterministic overtaker on, 0 = style bits only
 TaskIntervalMs=0     # 0 = off; a periodic heartbeat reissue resets maneuvers mid-flight
 ```
 
