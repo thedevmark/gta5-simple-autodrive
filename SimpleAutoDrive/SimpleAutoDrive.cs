@@ -47,7 +47,7 @@ public class SimpleAutoDrive : Script
         _speeds[2] = cfg.GetValue("MAIN", "SpeedInsane", 36.0f);
         _styles[0] = cfg.GetValue("MAIN", "StyleCruise", 786603);   // civil
         _styles[1] = cfg.GetValue("MAIN", "StyleHurried", 1074528805);   // Rushed + wrong-way-when-blocked
-        _styles[2] = cfg.GetValue("MAIN", "StyleInsane", 1074528805);   // Rushed + wrong-way-when-blocked
+        _styles[2] = cfg.GetValue("MAIN", "StyleInsane", 1074534949);   // + wrong-way + overtake-left/right bits (2048|4096)
         _tier = cfg.GetValue("MAIN", "DefaultTier", 1);             // Hurried
         if (_tier < 0 || _tier > 2) _tier = 1;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);

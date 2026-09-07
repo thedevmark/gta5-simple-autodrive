@@ -17,7 +17,7 @@ Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing auto
 |---|---|---|
 | Cruise | ~61 km/h | civil — stops at lights, yields |
 | Hurried (default) | ~94 km/h | Rushed + wrong-way-when-blocked — passes slow traffic |
-| Insane | ~130 km/h | Rushed + wrong-way-when-blocked — overtakes through the oncoming lane |
+| Insane | ~130 km/h | Rushed + wrong-way-when-blocked + overtake-left/right bits — crosses into the oncoming lane to pass, single-lane roads included |
 
 Every speed and style is editable in the ini.
 
@@ -88,7 +88,7 @@ Reference the ScriptHookVDotNet3.dll from the game you'll run it on. Any Roslyn 
 
 ## Driving style values
 
-The defaults are presets from the community's [driving-styles reference](https://gtaforums.com/topic/822314-guide-driving-styles/) — `786603` civil, `1074528293` the real SHVDN "Rushed" (brakes near moving cars but passes them), `1074528805` adds bit 512, which allows using the oncoming lane when your lane is blocked. The old `2883621` you'll see in other mods ignores lights but mostly *queues* behind traffic — that's the value this mod replaced after its author watched it politely follow a van for three miles. Compose your own with the [driving style calculator](https://vespura.com/fivem/drivingstyle/).
+The defaults are presets from the community's [driving-styles reference](https://gtaforums.com/topic/822314-guide-driving-styles/) — `786603` civil, `1074528293` the real SHVDN "Rushed" (brakes near moving cars but passes them), `1074528805` adds bit 512, which allows using the oncoming lane when your lane is blocked. Insane (`1074534949`) additionally sets bits 2048|4096, which field testing on the driving-styles thread associated with weaving left/right around blocked traffic — the difference between "will pass when convenient" and "will pass on a single-lane road". The old `2883621` you'll see in other mods ignores lights but mostly *queues* behind traffic — that's the value this mod replaced after its author watched it politely follow a van for three miles. Compose your own with the [driving style calculator](https://vespura.com/fivem/drivingstyle/).
 
 ## Notes
 
