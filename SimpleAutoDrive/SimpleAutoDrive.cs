@@ -15,15 +15,15 @@ using GTA.UI;
 // so it can never follow a stale route.
 public class SimpleAutoDrive : Script
 {
-    static readonly string[] TierNames = { "Cruise", "Hurried", "Insane" };
+    static readonly string[] TierNames = { "Cruise", "Brisk", "Hurried", "Insane" };
 
     bool _on;
     Vector3 _target;
     Keys _toggle;
     Keys _tierKey;
     int _tier;
-    readonly float[] _speeds = new float[3];
-    readonly int[] _styles = new int[3];
+    readonly float[] _speeds = new float[4];
+    readonly int[] _styles = new int[4];
     float _stopRange;
     int _taskIntervalMs;
     DateTime _lastTask = DateTime.MinValue;
@@ -56,11 +56,13 @@ public class SimpleAutoDrive : Script
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
         cfg.SetValue("MAIN", "TierKey", _tierKey.ToString());
         cfg.SetValue("MAIN", "SpeedCruise", _speeds[0]);
-        cfg.SetValue("MAIN", "SpeedHurried", _speeds[1]);
-        cfg.SetValue("MAIN", "SpeedInsane", _speeds[2]);
+        cfg.SetValue("MAIN", "SpeedBrisk", _speeds[1]);
+        cfg.SetValue("MAIN", "SpeedHurried", _speeds[2]);
+        cfg.SetValue("MAIN", "SpeedInsane", _speeds[3]);
         cfg.SetValue("MAIN", "StyleCruise", _styles[0]);
-        cfg.SetValue("MAIN", "StyleHurried", _styles[1]);
-        cfg.SetValue("MAIN", "StyleInsane", _styles[2]);
+        cfg.SetValue("MAIN", "StyleBrisk", _styles[1]);
+        cfg.SetValue("MAIN", "StyleHurried", _styles[2]);
+        cfg.SetValue("MAIN", "StyleInsane", _styles[3]);
         cfg.SetValue("MAIN", "DefaultTier", _tier);
         cfg.SetValue("MAIN", "StopRange", _stopRange);
         cfg.SetValue("MAIN", "TaskIntervalMs", _taskIntervalMs);
@@ -203,7 +205,7 @@ public class SimpleAutoDrive : Script
 
     void CycleTier()
     {
-        _tier = (_tier + 1) % 3;
+        _tier = (_tier + 1) % 4;
         if (_on)
         {
             Retask();

@@ -9,15 +9,16 @@ Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing auto
 | Input | Action |
 |---|---|
 | Tap F6 | autopilot on / off |
-| Tap F9 | cycle aggression tier — applies immediately, even mid-drive |
+| Tap F9 | cycle aggression tier (Cruise, Brisk, Hurried, Insane) — applies immediately, even mid-drive |
 
 ## Aggression tiers
 
 | Tier | Speed | Style |
 |---|---|---|
-| Cruise | ~61 km/h | civil — stops at lights, yields |
-| Hurried (default) | ~94 km/h | Rushed + wrong-way-when-blocked — passes slow traffic |
-| Insane | ~130 km/h | Rushed + wrong-way-when-blocked + overtake-left/right bits — crosses into the oncoming lane to pass, single-lane roads included |
+| Cruise | ~58 km/h | civil — stops at lights, yields |
+| Brisk | ~76 km/h | SHVDN Rushed — passes slow traffic when convenient, stays in its lane |
+| Hurried (default) | ~94 km/h | Rushed + wrong-way-when-blocked |
+| Insane | ~130 km/h | + overtake-left/right bits — crosses into the oncoming lane to pass, single-lane roads included |
 
 Every speed and style is editable in the ini.
 
@@ -61,13 +62,15 @@ The drive command is reissued **every 2 seconds from the car's current position*
 [MAIN]
 ToggleKey=F6        # any System.Windows.Forms.Keys name
 TierKey=F9          # tap to cycle aggression tier
-DefaultTier=1       # 0 Cruise / 1 Hurried / 2 Insane - tier at startup
-SpeedCruise=17.0    # meters per second (km/h = value x 3.6)
+DefaultTier=2       # 0 Cruise / 1 Brisk / 2 Hurried / 3 Insane - tier at startup
+SpeedCruise=16.0    # meters per second (km/h = value x 3.6)
+SpeedBrisk=21.0
 SpeedHurried=26.0
 SpeedInsane=36.0
-StyleCruise=786603  # civil (stops at lights) / rushed (does not)
-StyleHurried=1074528293
-StyleInsane=1074528805
+StyleCruise=786603       # civil (stops at lights)
+StyleBrisk=1074528293    # SHVDN Rushed - passes when convenient
+StyleHurried=1074528805  # + wrong-way-when-blocked
+StyleInsane=1074534949   # + overtake-left/right bits
 StopRange=15.0      # meters to destination to count as arrived
 TaskIntervalMs=0     # 0 = off; a periodic heartbeat reissue resets maneuvers mid-flight
 ```
