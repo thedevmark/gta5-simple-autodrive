@@ -21,6 +21,10 @@ Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing auto
 
 Every speed and style is editable in the ini.
 
+## Destinations
+
+The player waypoint (purple marker) takes priority. Without one, the mod follows the nearest **mission objective blip farther than 50 m** - so it works during missions, and it re-targets automatically as the objective moves. Contact markers beside you in free roam are ignored via the 50 m rule.
+
 ## How it stays on route
 
 The drive command is reissued **every 2 seconds from the car's current position**. There is no cached route to go stale and no wrong way to drive — the task is always "get from here to the waypoint." Arrival (default 15 m) stops the car dead and returns control.

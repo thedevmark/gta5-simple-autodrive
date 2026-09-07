@@ -180,9 +180,9 @@ public class SimpleAutoDrive : Script
         {
             Ped p = Game.Player.Character;
             Vehicle v = p != null ? p.CurrentVehicle : null;
-            if (!Function.Call<bool>(Hash.IS_WAYPOINT_ACTIVE))
+            if (WaypointPos() == Vector3.Zero)
             {
-                Notification.Show("~y~Set a waypoint first");
+                Notification.Show("~y~Set a waypoint or mission objective first");
                 return;
             }
             if (v == null || !v.Exists() || p.SeatIndex != VehicleSeat.Driver)
@@ -222,10 +222,24 @@ public class SimpleAutoDrive : Script
 
     Vector3 WaypointPos()
     {
+        // Player-set waypoint (purple, sprite 8) first...
         int blip = Function.Call<int>(Hash.GET_FIRST_BLIP_INFO_ID, 8);
-        if (!Function.Call<bool>(Hash.DOES_BLIP_EXIST, blip))
-            return Vector3.Zero;
-        return Function.Call<Vector3>(Hash.GET_BLIP_INFO_ID_COORD, blip);
+        if (Function.Call<bool>(Hash.DOES_BLIP_EXIST, blip))
+            return Function.Call<Vector3>(Hash.GET_BLIP_INFO_ID_COORD, blip);
+
+        // ...then mission objective blips (sprite 1). Skip anything within 50m
+        // so free-roam contact markers next to the player don't hijack it.
+        // Mission objectives move as a mission progresses; the >20m change
+        // detection in OnTick follows them automatically.
+        blip = Function.Call<int>(Hash.GET_FIRST_BLIP_INFO_ID, 1);
+        while (Function.Call<bool>(Hash.DOES_BLIP_EXIST, blip))
+        {
+            Vector3 c = Function.Call<Vector3>(Hash.GET_BLIP_INFO_ID_COORD, blip);
+            if (Game.Player.Character.Position.DistanceTo(c) > 50.0f)
+                return c;
+            blip = Function.Call<int>(Hash.GET_NEXT_BLIP_INFO_ID, blip);
+        }
+        return Vector3.Zero;
     }
 
     void Retask(bool loopBreaker = false)
