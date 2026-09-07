@@ -27,6 +27,10 @@ public class SimpleAutoDrive : Script
     float _stopRange;
     int _taskIntervalMs;
     DateTime _lastTask = DateTime.MinValue;
+    float _bestDist = -1f;
+    DateTime _lastProgressAt = DateTime.MinValue;
+    DateTime _stuckSince = DateTime.MinValue;
+    Vector3 _knownWaypoint = Vector3.Zero;
 
     public SimpleAutoDrive()
     {
@@ -45,7 +49,7 @@ public class SimpleAutoDrive : Script
         _tier = cfg.GetValue("MAIN", "DefaultTier", 1);             // Hurried
         if (_tier < 0 || _tier > 2) _tier = 1;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
-        _taskIntervalMs = cfg.GetValue("MAIN", "TaskIntervalMs", 4500);
+        _taskIntervalMs = cfg.GetValue("MAIN", "TaskIntervalMs", 15000); // heartbeat only - see OnTick
 
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
         cfg.SetValue("MAIN", "TierKey", _tierKey.ToString());
@@ -99,6 +103,41 @@ public class SimpleAutoDrive : Script
             Stop();
             Notification.Show("~g~Arrived");
             return;
+        }
+
+        // Retask on evidence, not on a blind timer: a timer that fires mid-maneuver
+        // aborts overtakes and re-issues turns the car is already taking.
+        // Heartbeat, waypoint change, stuck-in-place, or losing ground.
+        Vector3 wp = WaypointPos();
+        if (wp != Vector3.Zero && _knownWaypoint != Vector3.Zero &&
+            wp.DistanceTo(_knownWaypoint) > 20.0f)
+        {
+            Retask(); // picks up the new waypoint
+        }
+
+        float dist = p.Position.DistanceTo(_target);
+
+        if (v.Speed < 2.0f)
+        {
+            if (_stuckSince == DateTime.MinValue) _stuckSince = DateTime.UtcNow;
+            else if ((DateTime.UtcNow - _stuckSince).TotalSeconds > 6.0)
+            {
+                Retask();
+                _stuckSince = DateTime.UtcNow;
+            }
+        }
+        else _stuckSince = DateTime.MinValue;
+
+        if (_bestDist < 0f || dist < _bestDist - 8.0f)
+        {
+            _bestDist = dist;
+            _lastProgressAt = DateTime.UtcNow;
+        }
+        if ((DateTime.UtcNow - _lastProgressAt).TotalSeconds > 10.0)
+        {
+            // 10s without getting 8m closer to the destination: wrong way or boxed in
+            Retask();
+            _bestDist = -1f;
         }
 
         if ((DateTime.UtcNow - _lastTask).TotalMilliseconds > _taskIntervalMs)
@@ -176,6 +215,9 @@ public class SimpleAutoDrive : Script
         {
             _target = t;
         }
+        _knownWaypoint = _target;
+        _bestDist = -1f;
+        _lastProgressAt = DateTime.UtcNow;
 
         Ped p = Game.Player.Character;
         Vehicle v = p.CurrentVehicle;
