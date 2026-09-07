@@ -37,6 +37,8 @@ public class SimpleAutoDrive : Script
     bool _passing;
     Vector3 _passTarget;
     DateTime _passStart;
+    int _loopBreakers;
+    DateTime _loopPauseUntil = DateTime.MinValue;
 
     public SimpleAutoDrive()
     {
@@ -116,6 +118,13 @@ public class SimpleAutoDrive : Script
     void OnTick(object sender, EventArgs e)
     {
         if (!_on) return;
+
+        // dead-stop pause during a loop reset: give the planner a standstill restart
+        if (_loopPauseUntil != DateTime.MinValue)
+        {
+            if (DateTime.UtcNow < _loopPauseUntil) return;
+            _loopPauseUntil = DateTime.MinValue;
+        }
 
         Ped p = Game.Player.Character;
         Vehicle v = p != null ? p.CurrentVehicle : null;
@@ -207,16 +216,31 @@ public class SimpleAutoDrive : Script
         {
             _bestDist = dist;
             _lastProgressAt = DateTime.UtcNow;
-            if (_distAtLastRetask - dist > 40.0f) _noProgressRetasks = 0;
+            if (_distAtLastRetask - dist > 40.0f) { _noProgressRetasks = 0; _loopBreakers = 0; }
         }
         if ((DateTime.UtcNow - _lastProgressAt).TotalSeconds > 25.0)
         {
             // 25s without getting 5m closer. City routes legitimately wander sideways
             // for a while; 25s/5m only trips on genuinely losing ground or looping.
             _noProgressRetasks++;
-            bool looped = _noProgressRetasks >= 3;
-            Retask(looped);
-            if (looped) _noProgressRetasks = 0;
+            if (_noProgressRetasks >= 3)
+            {
+                _noProgressRetasks = 0;
+                _loopBreakers++;
+                if (_loopBreakers >= 3)
+                {
+                    // stacked roads / interchanges the engine planner cannot route:
+                    // orbiting forever helps nobody. Hand back control, say why.
+                    Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
+                    Stop();
+                    Notification.Show("~y~AutoDrive OFF - cannot route from here, take over");
+                    return;
+                }
+                // dead-stop reset: planners stuck in a turn loop often recover from standstill
+                Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
+                _loopPauseUntil = DateTime.UtcNow.AddSeconds(1.5);
+                Retask(true);
+            }
             _bestDist = -1f;
         }
 
@@ -337,6 +361,8 @@ public class SimpleAutoDrive : Script
         if (!_on) return;
         _on = false;
         _passing = false;
+        _loopBreakers = 0;
+        _loopPauseUntil = DateTime.MinValue;
         Ped p = Game.Player.Character;
         if (p != null && p.Exists())
             Function.Call(Hash.CLEAR_PED_TASKS, p);
