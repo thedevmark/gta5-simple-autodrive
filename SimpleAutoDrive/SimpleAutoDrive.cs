@@ -150,7 +150,7 @@ public class SimpleAutoDrive : Script
         if (v == null || !v.Exists() || p.SeatIndex != VehicleSeat.Driver)
         {
             Stop();
-            Notification.Show("AutoDrive OFF");
+            GTA.UI.Screen.ShowSubtitle("AutoDrive OFF", 1500);
             return;
         }
 
@@ -160,7 +160,7 @@ public class SimpleAutoDrive : Script
         {
             Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
             Stop();
-            Notification.Show("~g~Arrived");
+            GTA.UI.Screen.ShowSubtitle("~g~Arrived", 1500);
             return;
         }
 
@@ -220,7 +220,7 @@ public class SimpleAutoDrive : Script
             {
                 Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
                 Stop();
-                Notification.Show("~y~AutoDrive OFF - cannot route from here, take over");
+                GTA.UI.Screen.ShowSubtitle("~y~AutoDrive OFF - cannot route from here, take over", 2000);
                 return;
             }
 
@@ -276,7 +276,7 @@ public class SimpleAutoDrive : Script
                     Function.Call(Hash.SHOOT_SINGLE_BULLET_BETWEEN_COORDS,
                         from.X, from.Y, from.Z, to.X, to.Y, to.Z,
                         5.0f, false, 0x1B06D571 /* pistol */, p, true, false, 1000.0f);
-                    Notification.Show("~r~Insane: clearing the road");
+                    GTA.UI.Screen.ShowSubtitle("~r~Insane: clearing the road", 1500);
                     return;
                 }
 
@@ -346,22 +346,22 @@ public class SimpleAutoDrive : Script
             Vehicle v = p != null ? p.CurrentVehicle : null;
             if (WaypointPos() == Vector3.Zero)
             {
-                Notification.Show("~y~Set a waypoint or mission objective first");
+                GTA.UI.Screen.ShowSubtitle("~y~Set a waypoint or mission objective first", 1500);
                 return;
             }
             if (v == null || !v.Exists() || p.SeatIndex != VehicleSeat.Driver)
             {
-                Notification.Show("~y~Be in the driver seat first");
+                GTA.UI.Screen.ShowSubtitle("~y~Be in the driver seat first", 1500);
                 return;
             }
             _on = true;
-            Notification.Show("~g~AutoDrive ON~w~ - " + TierLabel());
+            GTA.UI.Screen.ShowSubtitle("~g~AutoDrive ON~w~ - " + TierLabel(), 1500);
             Retask();
         }
         else
         {
             Stop();
-            Notification.Show("AutoDrive OFF");
+            GTA.UI.Screen.ShowSubtitle("AutoDrive OFF", 1500);
         }
     }
 
@@ -371,11 +371,11 @@ public class SimpleAutoDrive : Script
         if (_on)
         {
             Retask(); // styles differ per tier, so the task must be reissued; speed follows live
-            Notification.Show("AutoDrive - " + TierLabel());
+            GTA.UI.Screen.ShowSubtitle("AutoDrive - " + TierLabel(), 1500);
         }
         else
         {
-            Notification.Show("AutoDrive tier - " + TierLabel());
+            GTA.UI.Screen.ShowSubtitle("AutoDrive tier - " + TierLabel(), 1500);
         }
     }
 
@@ -432,7 +432,7 @@ public class SimpleAutoDrive : Script
 
         int style = loopBreaker ? 786603 : _styles[_tier];
         if (loopBreaker)
-            Notification.Show("~y~AutoDrive: rerouting (stall detected)");
+            GTA.UI.Screen.ShowSubtitle("~y~AutoDrive: rerouting (stall detected)", 1500);
 
         Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, p, v,
             _target.X, _target.Y, _target.Z, DesiredSpeed(v, p.Position.DistanceTo(_target)),
