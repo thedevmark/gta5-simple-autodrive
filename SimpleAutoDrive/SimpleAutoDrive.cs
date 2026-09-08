@@ -247,7 +247,10 @@ public class SimpleAutoDrive : Script
         }
 
         // ---- overtake / shoot logic when sagging behind a slower car ----
-        if (_overtake && v.Speed < _speeds[_tier] * 0.35f)
+        // 70% of tier speed: "I want 130 but I am doing 75" triggers a pass attempt.
+            // The old 35% threshold (45 km/h on Insane) never fired on highways
+            // where traffic moves at 70-90 km/h - the car just cruised behind.
+            if (_overtake && v.Speed < _speeds[_tier] * 0.70f)
         {
             Vehicle blocker = null;
             float best = 30.0f;
