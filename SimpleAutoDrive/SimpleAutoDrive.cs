@@ -58,6 +58,8 @@ public class SimpleAutoDrive : Script
     DateTime _passStart;
     DateTime _lastShot = DateTime.MinValue;
     int _shotsAtBlocker;
+    DateTime _passCooldownUntil = DateTime.MinValue;
+    int _passFailures;
 
     readonly bool[] _keyLatched = new bool[2];
 
@@ -190,6 +192,18 @@ public class SimpleAutoDrive : Script
             if (arrived || timedOut)
             {
                 _passing = false;
+                if (timedOut && !arrived)
+                {
+                    _passFailures++;
+                    // Backed out of a pass: don't immediately re-trigger. The
+                    // endless try-and-pussy-out loop in busy traffic is worse
+                    // than just following for a while.
+                    _passCooldownUntil = DateTime.UtcNow.AddSeconds(_passFailures >= 3 ? 30.0 : 6.0);
+                }
+                else
+                {
+                    _passFailures = 0; // clean pass
+                }
                 Retask();
             }
             return;
@@ -201,6 +215,7 @@ public class SimpleAutoDrive : Script
             _bestDistEver = dist;
             _lastMeaningfulProgress = DateTime.UtcNow;
             _loopBreakers = 0;
+            _passFailures = 0;
         }
 
         bool stalled = v.Speed < 1.0f;
@@ -275,10 +290,32 @@ public class SimpleAutoDrive : Script
                 // on the shoulder. GTA vehicles drive on shoulders fine; the pole
                 // problem was from full-speed passes, not from passing itself.
                 // Cap at 20 m/s and let the physics handle the rest.
-                _passing = true;
-                _passStart = DateTime.UtcNow;
+                // Don't start what you can't finish: check for oncoming traffic
+                // in the left corridor before committing. A pass into a car
+                // heading at you is a brake-and-swerve, not an overtake.
+                if (DateTime.UtcNow < _passCooldownUntil) return;
                 Vector3 right = Vector3.Cross(fwd, Vector3.WorldUp).Normalized;
                 _passTarget = blocker.Position + blocker.ForwardVector.Normalized * 35.0f - right * 3.2f;
+
+                bool oncomingInCorridor = false;
+                Vector3 corridorDir = (_passTarget - v.Position).Normalized;
+                float corridorLength = v.Position.DistanceTo(_passTarget);
+                foreach (Vehicle other2 in World.GetNearbyVehicles(_passTarget, corridorLength + 30.0f))
+                {
+                    if (other2 == null || !other2.Exists() || other2.Handle == v.Handle) continue;
+                    // oncoming: heading roughly toward us
+                    if (Vector3.Dot(other2.ForwardVector, fwd) > -0.3f) continue;
+                    // in the corridor: close to the line from us to the pass target
+                    Vector3 toOther = other2.Position - v.Position;
+                    float along = Vector3.Dot(toOther, corridorDir);
+                    if (along < 0f || along > corridorLength + 25.0f) continue;
+                    float lateral = (toOther - corridorDir * along).Length();
+                    if (lateral < 6.0f) { oncomingInCorridor = true; break; }
+                }
+                if (oncomingInCorridor) return; // wait for a gap
+
+                _passing = true;
+                _passStart = DateTime.UtcNow;
                 Function.Call((Hash)0xE2A2AA2F659D77A7, p, v,  // TASK_VEHICLE_DRIVE_TO_COORD, not in SHVDN enum
                     _passTarget.X, _passTarget.Y, _passTarget.Z,
                     Math.Min(_speeds[_tier], 20.0f), 1, 0, 1074528805, 2.5f, -1f);
