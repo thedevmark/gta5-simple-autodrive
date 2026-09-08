@@ -32,6 +32,12 @@ The player waypoint (purple marker) takes priority. Without one, the mod follows
 
 Style bits ask the engine nicely; the overtaker doesn't ask. When the car sags below 35% of tier speed behind a slower same-direction vehicle, the mod drives *directly* to a point ~35 m past the blocker in the oncoming lane, then resumes the waypoint task. A pass times out after 12 s and the normal evidence-based logic resumes. Toggle with `Overtake=1/0` in the ini (default on).
 
+## The v3 architecture
+
+The drive task is issued **once per destination**. Re-issuing the task is what a passenger perceives as recalculating, so it now happens only on events: the destination changed, the tier changed (style bits differ), an overtaking pass completed, or a genuine stall. Speed is not part of the task at all - it breathes continuously through `SET_DRIVE_TASK_MAX_CRUISE_SPEED`, scaled by how sharply the destination sits off the nose and ramped down on final approach. The result: no wall-clock replans, no mid-corner recalculations, and tier changes adjust speed live.
+
+A stall means **stopped with clear road ahead** - a car in front within 14 m means a queue or a red light, which gets patience (45 s). A true stall dead-stops the car for 1.5 s and reissues once; three strikes on a trip hand control back with a notice.
+
 ## How it stays on route
 
 The drive command is reissued **every 2 seconds from the car's current position**. There is no cached route to go stale and no wrong way to drive — the task is always "get from here to the waypoint." Arrival (default 15 m) stops the car dead and returns control.

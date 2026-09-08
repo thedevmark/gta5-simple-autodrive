@@ -6,13 +6,25 @@ using GTA.Math;
 using GTA.Native;
 using GTA.UI;
 
-// SimpleAutoDrive - one-key waypoint autopilot for GTA V Enhanced (SHVDN3).
-// Tap F6 to start/stop, tap F9 to cycle the aggression tier
-// (Cruise / Hurried / Insane; applies immediately, even mid-drive).
-// Tier is a tap key, not a hold key: vanilla GTA binds hold-F6 to the
-// character switch wheel, so holds on F6 fight the game.
-// The drive task is reissued every 2s from the car's current position
-// so it can never follow a stale route.
+// SimpleAutoDrive v3 - event-driven autopilot.
+//
+// Architecture (v3.0.0, rebuilt for coherence after field feedback that the
+// timer-based retasking "recalculates at weird times"):
+//   - The LONGRANGE drive task is issued ONCE per destination. Re-issuing is
+//     what the passenger perceives as recalculating; it now happens only on
+//     events: destination changed, tier changed (style bits differ), a pass
+//     completed, or a genuine stall.
+//   - Speed is NOT part of the task anymore. It breathes continuously via
+//     SET_DRIVE_TASK_MAX_CRUISE_SPEED: tier speed scaled by how sharply the
+//     destination sits off the nose, and ramped down on final approach.
+//     Changing tiers mid-drive adjusts speed live; no replan.
+//   - A stall is "stopped with no queue ahead" (a car ahead within 14 m,
+//     same direction, means a red light or traffic - patience). A true stall
+//     dead-stops the car for 1.5 s and reissues once. Three strikes on one
+//     trip hand control back with a notice instead of orbiting.
+//   - Insane only: when stopped behind a blocker, a low-damage warning round
+//     into its bumper lets panic move it before any overtaking pass. Passes
+//     only commit onto pavement and never above 20 m/s (poles live off-road).
 public class SimpleAutoDrive : Script
 {
     static readonly string[] TierNames = { "Cruise", "Brisk", "Hurried", "Insane" };
@@ -25,20 +37,29 @@ public class SimpleAutoDrive : Script
     readonly float[] _speeds = new float[4];
     readonly int[] _styles = new int[4];
     float _stopRange;
-    int _taskIntervalMs;
-    DateTime _lastTask = DateTime.MinValue;
-    float _bestDist = -1f;
-    DateTime _lastProgressAt = DateTime.MinValue;
-    DateTime _stuckSince = DateTime.MinValue;
-    Vector3 _knownWaypoint = Vector3.Zero;
-    int _noProgressRetasks;
-    float _distAtLastRetask = -1f;
     bool _overtake;
+    bool _shootBlockers;
+
+    // event/task state
+    DateTime _lastTask = DateTime.MinValue;
+    DateTime _lastSpeedUpdate = DateTime.MinValue;
+    Vector3 _knownWaypoint = Vector3.Zero;
+
+    // stall / wrong-way state
+    DateTime _stalledSince = DateTime.MinValue;
+    float _bestDistEver = -1f;
+    DateTime _lastMeaningfulProgress = DateTime.MinValue;
+    int _loopBreakers;
+    DateTime _loopPauseUntil = DateTime.MinValue;
+
+    // overtake / shooting state
     bool _passing;
     Vector3 _passTarget;
     DateTime _passStart;
-    int _loopBreakers;
-    DateTime _loopPauseUntil = DateTime.MinValue;
+    DateTime _lastShot = DateTime.MinValue;
+    int _shotsAtBlocker;
+
+    readonly bool[] _keyLatched = new bool[2];
 
     public SimpleAutoDrive()
     {
@@ -60,7 +81,7 @@ public class SimpleAutoDrive : Script
         if (_tier < 0 || _tier > 3) _tier = 2;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
         _overtake = cfg.GetValue("MAIN", "Overtake", 1) == 1;
-        _taskIntervalMs = cfg.GetValue("MAIN", "TaskIntervalMs", 0); // 0 = off; any heartbeat is a periodic mid-maneuver reset
+        _shootBlockers = cfg.GetValue("MAIN", "ShootBlockers", 1) == 1; // Insane tier only
 
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
         cfg.SetValue("MAIN", "TierKey", _tierKey.ToString());
@@ -75,10 +96,10 @@ public class SimpleAutoDrive : Script
         cfg.SetValue("MAIN", "DefaultTier", _tier);
         cfg.SetValue("MAIN", "StopRange", _stopRange);
         cfg.SetValue("MAIN", "Overtake", _overtake ? 1 : 0);
-        cfg.SetValue("MAIN", "TaskIntervalMs", _taskIntervalMs);
+        cfg.SetValue("MAIN", "ShootBlockers", _shootBlockers ? 1 : 0);
         cfg.Save();
 
-        Interval = 100;
+        Interval = 250;
         KeyDown += OnKeyDown;
         KeyUp += OnKeyUp;
         Tick += OnTick;
@@ -90,8 +111,6 @@ public class SimpleAutoDrive : Script
         Keys k;
         return Enum.TryParse(name, true, out k) ? k : fallback;
     }
-
-    readonly bool[] _keyLatched = new bool[2]; // [0]=toggle, [1]=tier; one action per physical press
 
     void OnKeyDown(object sender, KeyEventArgs e)
     {
@@ -119,7 +138,7 @@ public class SimpleAutoDrive : Script
     {
         if (!_on) return;
 
-        // dead-stop pause during a loop reset: give the planner a standstill restart
+        // dead-stop pause during a stall reset
         if (_loopPauseUntil != DateTime.MinValue)
         {
             if (DateTime.UtcNow < _loopPauseUntil) return;
@@ -135,7 +154,9 @@ public class SimpleAutoDrive : Script
             return;
         }
 
-        if (p.Position.DistanceTo(_target) < _stopRange)
+        float dist = p.Position.DistanceTo(_target);
+
+        if (dist < _stopRange)
         {
             Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
             Stop();
@@ -143,110 +164,173 @@ public class SimpleAutoDrive : Script
             return;
         }
 
-        // Deterministic overtaker: when we sag to a crawl behind a slower
-        // same-direction vehicle, drive directly to a point past it in the
-        // oncoming lane, then resume the waypoint task.
-        if (_overtake)
-        {
-            if (_passing)
-            {
-                bool arrived = p.Position.DistanceTo(_passTarget) < 12.0f;
-                bool timedOut = (DateTime.UtcNow - _passStart).TotalSeconds > 12.0;
-                if (arrived || timedOut)
-                {
-                    _passing = false;
-                    Retask();
-                }
-                return; // pass task owns the car; evidence retasks wait
-            }
+        if (v.Speed > 5.0f) _shotsAtBlocker = 0; // rolling again: reload the patience
 
-            if (v.Speed < _speeds[_tier] * 0.35f)
-            {
-                Vehicle blocker = null;
-                float best = 30.0f;
-                Vector3 fwd = v.ForwardVector;
-                foreach (Vehicle other in World.GetNearbyVehicles(v.Position, 35.0f))
-                {
-                    if (other == null || !other.Exists() || other.Handle == v.Handle) continue;
-                    Vector3 rel = other.Position - v.Position;
-                    float bdist = rel.Length();
-                    if (bdist > 30.0f || bdist < 3.0f) continue;
-                    if (Vector3.Dot(rel.Normalized, fwd) < 0.7f) continue;
-                    if (Vector3.Dot(other.ForwardVector, fwd) < 0.6f) continue;
-                    if (other.Speed > v.Speed + 2.0f) continue;
-                    if (bdist < best) { best = bdist; blocker = other; }
-                }
-                if (blocker != null)
-                {
-                    _passing = true;
-                    _passStart = DateTime.UtcNow;
-                    Vector3 right = Vector3.Cross(fwd, Vector3.WorldUp).Normalized;
-                    _passTarget = blocker.Position + blocker.ForwardVector.Normalized * 35.0f - right * 3.2f;
-                    Function.Call((Hash)0xE2A2AA2F659D77A7, p, v,  // TASK_VEHICLE_DRIVE_TO_COORD, not in SHVDN enum
-                        _passTarget.X, _passTarget.Y, _passTarget.Z,
-                        _speeds[_tier], 1, 0, 1074528805, 2.5f, -1f);
-                }
-            }
-        }
-
-        // Retask on evidence, not on a blind timer: a timer that fires mid-maneuver
-        // aborts overtakes and re-issues turns the car is already taking.
-        // Heartbeat, waypoint change, stuck-in-place, or losing ground.
+        // ---- destination changed? (the one replan a passenger understands) ----
         Vector3 wp = WaypointPos();
         if (wp != Vector3.Zero && _knownWaypoint != Vector3.Zero &&
             wp.DistanceTo(_knownWaypoint) > 20.0f)
         {
-            Retask(); // picks up the new waypoint
+            Retask();
+            dist = p.Position.DistanceTo(_target);
         }
 
-        float dist = p.Position.DistanceTo(_target);
-
-        if (v.Speed < 2.0f)
+        // ---- continuous speed control: no replans, just breathing ----
+        if (!_passing && (DateTime.UtcNow - _lastSpeedUpdate).TotalMilliseconds >= 500)
         {
-            if (_stuckSince == DateTime.MinValue) _stuckSince = DateTime.UtcNow;
-            else if ((DateTime.UtcNow - _stuckSince).TotalSeconds > 12.0)
+            _lastSpeedUpdate = DateTime.UtcNow;
+            Function.Call(Hash.SET_DRIVE_TASK_MAX_CRUISE_SPEED, p, DesiredSpeed(v, dist), 1);
+        }
+
+        // ---- pass in progress: let it run out ----
+        if (_passing)
+        {
+            bool arrived = p.Position.DistanceTo(_passTarget) < 12.0f;
+            bool timedOut = (DateTime.UtcNow - _passStart).TotalSeconds > 12.0;
+            if (arrived || timedOut)
             {
+                _passing = false;
                 Retask();
-                _stuckSince = DateTime.UtcNow;
             }
+            return;
         }
-        else _stuckSince = DateTime.MinValue;
 
-        if (_bestDist < 0f || dist < _bestDist - 5.0f)
+        // ---- stall and wrong-way detection (event thresholds, not cadence) ----
+        if (_bestDistEver < 0f || dist < _bestDistEver - 25.0f)
         {
-            _bestDist = dist;
-            _lastProgressAt = DateTime.UtcNow;
-            if (_distAtLastRetask - dist > 40.0f) { _noProgressRetasks = 0; _loopBreakers = 0; }
+            _bestDistEver = dist;
+            _lastMeaningfulProgress = DateTime.UtcNow;
+            _loopBreakers = 0;
         }
-        if ((DateTime.UtcNow - _lastProgressAt).TotalSeconds > 25.0)
+
+        bool stalled = v.Speed < 1.0f;
+        if (stalled)
         {
-            // 25s without getting 5m closer. City routes legitimately wander sideways
-            // for a while; 25s/5m only trips on genuinely losing ground or looping.
-            _noProgressRetasks++;
-            if (_noProgressRetasks >= 3)
+            if (_stalledSince == DateTime.MinValue) _stalledSince = DateTime.UtcNow;
+        }
+        else _stalledSince = DateTime.MinValue;
+
+        bool wrongWay = _bestDistEver > 0f && dist > _bestDistEver + 150.0f;
+        bool longDead = (DateTime.UtcNow - _lastMeaningfulProgress).TotalSeconds > 90.0;
+
+        if (wrongWay || longDead || StalledTooLong(v, _stalledSince))
+        {
+            _loopBreakers++;
+            if (_loopBreakers >= 3)
             {
-                _noProgressRetasks = 0;
-                _loopBreakers++;
-                if (_loopBreakers >= 3)
+                Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
+                Stop();
+                Notification.Show("~y~AutoDrive OFF - cannot route from here, take over");
+                return;
+            }
+
+            // dead-stop reset: planners stuck in a turn loop often recover from standstill
+            Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
+            _loopPauseUntil = DateTime.UtcNow.AddSeconds(1.5);
+            Retask(true);
+            return;
+        }
+
+        // ---- overtake / shoot logic when sagging behind a slower car ----
+        if (_overtake && v.Speed < _speeds[_tier] * 0.35f)
+        {
+            Vehicle blocker = null;
+            float best = 30.0f;
+            Vector3 fwd = v.ForwardVector;
+            foreach (Vehicle other in World.GetNearbyVehicles(v.Position, 35.0f))
+            {
+                if (other == null || !other.Exists() || other.Handle == v.Handle) continue;
+                Vector3 rel = other.Position - v.Position;
+                float bdist = rel.Length();
+                if (bdist > 30.0f || bdist < 3.0f) continue;
+                if (Vector3.Dot(rel.Normalized, fwd) < 0.7f) continue;
+                if (Vector3.Dot(other.ForwardVector, fwd) < 0.6f) continue;
+                if (other.Speed > v.Speed + 2.0f) continue;
+                if (bdist < best) { best = bdist; blocker = other; }
+            }
+
+            // Pass targets live near shoulders where poles and signs grow:
+            // only pass onto pavement, and never at more than 20 m/s.
+            if (blocker != null)
+            {
+                Vector3 candidate = blocker.Position + blocker.ForwardVector.Normalized * 35.0f
+                    - Vector3.Cross(v.ForwardVector, Vector3.WorldUp).Normalized * 3.2f;
+                if (!Function.Call<bool>(Hash.IS_POINT_ON_ROAD, candidate.X, candidate.Y, candidate.Z, 0))
                 {
-                    // stacked roads / interchanges the engine planner cannot route:
-                    // orbiting forever helps nobody. Hand back control, say why.
-                    Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
-                    Stop();
-                    Notification.Show("~y~AutoDrive OFF - cannot route from here, take over");
+                    blocker = null; // no pavement to pass onto: hold and wait
+                }
+            }
+
+            if (blocker != null)
+            {
+                // Insane only: fire a warning round into the blocker's rear bumper
+                // and let the panic move it, before resorting to an overtaking pass.
+                if (_tier == 3 && _shootBlockers && _shotsAtBlocker < 3 &&
+                    v.Speed < 2.0f &&
+                    (DateTime.UtcNow - _lastShot).TotalMilliseconds > 3500)
+                {
+                    _lastShot = DateTime.UtcNow;
+                    _shotsAtBlocker++;
+                    Vector3 from = v.Position + fwd.Normalized * 2.5f + Vector3.WorldUp * 0.7f;
+                    Vector3 to = blocker.Position - blocker.ForwardVector.Normalized * 1.2f + Vector3.WorldUp * 0.6f;
+                    Function.Call(Hash.SHOOT_SINGLE_BULLET_BETWEEN_COORDS,
+                        from.X, from.Y, from.Z, to.X, to.Y, to.Z,
+                        5.0f, false, 0x1B06D571 /* pistol */, p, true, false, 1000.0f);
+                    Notification.Show("~r~Insane: clearing the road");
                     return;
                 }
-                // dead-stop reset: planners stuck in a turn loop often recover from standstill
-                Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
-                _loopPauseUntil = DateTime.UtcNow.AddSeconds(1.5);
-                Retask(true);
+
+                _passing = true;
+                _passStart = DateTime.UtcNow;
+                Vector3 right = Vector3.Cross(fwd, Vector3.WorldUp).Normalized;
+                _passTarget = blocker.Position + blocker.ForwardVector.Normalized * 35.0f - right * 3.2f;
+                Function.Call((Hash)0xE2A2AA2F659D77A7, p, v,  // TASK_VEHICLE_DRIVE_TO_COORD, not in SHVDN enum
+                    _passTarget.X, _passTarget.Y, _passTarget.Z,
+                    Math.Min(_speeds[_tier], 20.0f), 1, 0, 1074528805, 2.5f, -1f);
             }
-            _bestDist = -1f;
+        }
+    }
+
+    static bool StalledTooLong(Vehicle v, DateTime stalledSince)
+    {
+        if (stalledSince == DateTime.MinValue) return false;
+        double stopped = (DateTime.UtcNow - stalledSince).TotalSeconds;
+        if (stopped < 20.0) return false;
+
+        // A car ahead within 14 m, same direction, means a queue or a red
+        // light: keep waiting. Give lights up to 45 s before calling it.
+        foreach (Vehicle other in World.GetNearbyVehicles(v.Position, 18.0f))
+        {
+            if (other == null || !other.Exists() || other.Handle == v.Handle) continue;
+            Vector3 rel = other.Position - v.Position;
+            if (rel.Length() > 14.0f) continue;
+            if (Vector3.Dot(rel.Normalized, v.ForwardVector) < 0.7f) continue;
+            if (Vector3.Dot(other.ForwardVector, v.ForwardVector) < 0.6f) continue;
+            if (other.Speed > 2.0f) continue;
+            return stopped > 45.0; // queued behind someone who is also stuck
+        }
+        return true; // stopped with clear road ahead
+    }
+
+    float DesiredSpeed(Vehicle v, float dist)
+    {
+        float s = _speeds[_tier];
+
+        Vector3 dir = _target - v.Position; dir.Z = 0f;
+        Vector3 fwd = v.ForwardVector; fwd.Z = 0f;
+        if (dir.LengthSquared() > 1f && fwd.LengthSquared() > 0.01f)
+        {
+            float dot = Math.Max(-1f, Math.Min(1f, Vector3.Dot(dir.Normalized, fwd.Normalized)));
+            double ang = Math.Acos(dot) * 180.0 / Math.PI;
+            if (ang > 50.0) s *= 0.5f;       // hard turn ahead: give the wheel a chance
+            else if (ang > 25.0) s *= 0.75f;
         }
 
-        if (_taskIntervalMs > 0 &&
-            (DateTime.UtcNow - _lastTask).TotalMilliseconds > _taskIntervalMs)
-            Retask();
+        if (dist < 100.0f) s *= 0.6f;        // final approach
+        else if (dist < 250.0f) s *= 0.8f;
+
+        if (s < 10.0f) s = 10.0f;
+        return s;
     }
 
     void OnAborted(object sender, EventArgs e)
@@ -286,7 +370,7 @@ public class SimpleAutoDrive : Script
         _tier = (_tier + 1) % 4;
         if (_on)
         {
-            Retask();
+            Retask(); // styles differ per tier, so the task must be reissued; speed follows live
             Notification.Show("AutoDrive - " + TierLabel());
         }
         else
@@ -335,25 +419,24 @@ public class SimpleAutoDrive : Script
             _target = t;
         }
         _knownWaypoint = _target;
-        _bestDist = -1f;
-        _lastProgressAt = DateTime.UtcNow;
+        _bestDistEver = -1f;
+        _lastMeaningfulProgress = DateTime.UtcNow;
+        _passing = false;
 
         Ped p = Game.Player.Character;
         Vehicle v = p.CurrentVehicle;
         if (v == null || !v.Exists()) { Stop(); return; }
 
         _lastTask = DateTime.UtcNow;
-        _distAtLastRetask = p.Position.DistanceTo(_target);
+        _lastSpeedUpdate = DateTime.UtcNow;
 
-        // Loop breaker: three no-progress re-issues in a row means the route or the
-        // aggressive style itself is circling. Drop to civil style for one task -
-        // the wrong-way-when-blocked bit is the usual junction-circling culprit.
         int style = loopBreaker ? 786603 : _styles[_tier];
         if (loopBreaker)
-            Notification.Show("~y~AutoDrive: rerouting (loop detected)");
+            Notification.Show("~y~AutoDrive: rerouting (stall detected)");
 
         Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, p, v,
-            _target.X, _target.Y, _target.Z, _speeds[_tier], style, _stopRange);
+            _target.X, _target.Y, _target.Z, DesiredSpeed(v, p.Position.DistanceTo(_target)),
+            style, _stopRange);
     }
 
     void Stop()
@@ -361,8 +444,10 @@ public class SimpleAutoDrive : Script
         if (!_on) return;
         _on = false;
         _passing = false;
+        _shotsAtBlocker = 0;
         _loopBreakers = 0;
         _loopPauseUntil = DateTime.MinValue;
+        _stalledSince = DateTime.MinValue;
         Ped p = Game.Player.Character;
         if (p != null && p.Exists())
             Function.Call(Hash.CLEAR_PED_TASKS, p);
