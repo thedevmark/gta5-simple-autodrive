@@ -354,8 +354,11 @@ public class SimpleAutoDrive : Script
         {
             float dot = Math.Max(-1f, Math.Min(1f, Vector3.Dot(dir.Normalized, fwd.Normalized)));
             double ang = Math.Acos(dot) * 180.0 / Math.PI;
-            if (ang > 50.0) s *= 0.5f;       // hard turn ahead: give the wheel a chance
-            else if (ang > 25.0) s *= 0.75f;
+            // Highway curves routinely put the destination 20-40 degrees off-heading;
+            // that's not a turn, it's a road. Only genuinely sharp direction changes
+            // (city blocks, switchbacks, u-turn setups) get the slowdown.
+            if (ang > 60.0) s *= 0.6f;       // hard turn: genuinely need to slow
+            else if (ang > 35.0) s *= 0.8f;  // moderate turn: slight ease
         }
 
         if (dist < 100.0f) s *= 0.6f;        // final approach
