@@ -249,22 +249,12 @@ public class SimpleAutoDrive : Script
                 if (bdist < best) { best = bdist; blocker = other; }
             }
 
-            // Pass targets live near shoulders where poles and signs grow:
-            // only pass onto pavement, and never at more than 20 m/s.
             if (blocker != null)
             {
-                Vector3 candidate = blocker.Position + blocker.ForwardVector.Normalized * 35.0f
-                    - Vector3.Cross(v.ForwardVector, Vector3.WorldUp).Normalized * 3.2f;
-                if (!Function.Call<bool>(Hash.IS_POINT_ON_ROAD, candidate.X, candidate.Y, candidate.Z, 0))
-                {
-                    blocker = null; // no pavement to pass onto: hold and wait
-                }
-            }
-
-            if (blocker != null)
-            {
-                // Insane only: fire a warning round into the blocker's rear bumper
-                // and let the panic move it, before resorting to an overtaking pass.
+                // Insane only: fire a warning round into the blocker's rear bumper.
+                // A bullet needs no pavement check - decoupled from the pass logic
+                // because rural single-lane shoulders routinely fail IS_POINT_ON_ROAD,
+                // which used to block the shot too (car just sat there).
                 if (_tier == 3 && _shootBlockers && _shotsAtBlocker < 3 &&
                     v.Speed < 2.0f &&
                     (DateTime.UtcNow - _lastShot).TotalMilliseconds > 3500)
@@ -280,6 +270,11 @@ public class SimpleAutoDrive : Script
                     return;
                 }
 
+                // After shots exhausted (or non-Insane): pass. The pavement check
+                // was too strict on single-lane roads - the 3.2m offset often lands
+                // on the shoulder. GTA vehicles drive on shoulders fine; the pole
+                // problem was from full-speed passes, not from passing itself.
+                // Cap at 20 m/s and let the physics handle the rest.
                 _passing = true;
                 _passStart = DateTime.UtcNow;
                 Vector3 right = Vector3.Cross(fwd, Vector3.WorldUp).Normalized;
