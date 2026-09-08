@@ -358,29 +358,14 @@ public class SimpleAutoDrive : Script
 
     float DesiredSpeed(Vehicle v, float dist)
     {
+        // The LONGRANGE task's own AI handles cornering and approach speed.
+        // The turn-angle and arrival-ramp reductions I stacked here were
+        // fighting the task's native speed management and slowing every
+        // curving road to a crawl. Just give it the tier ceiling.
         float s = _speeds[_tier];
 
-        Vector3 dir = _target - v.Position; dir.Z = 0f;
-        Vector3 fwd = v.ForwardVector; fwd.Z = 0f;
-        if (dir.LengthSquared() > 1f && fwd.LengthSquared() > 0.01f)
-        {
-            float dot = Math.Max(-1f, Math.Min(1f, Vector3.Dot(dir.Normalized, fwd.Normalized)));
-            double ang = Math.Acos(dot) * 180.0 / Math.PI;
-            // 30/45 degrees with real reductions: the GTA driving AI loses
-            // steering authority above ~100 km/h. Highway curves (under 30
-            // degrees) still go full speed; anything sharper actually slows.
-            if (ang > 45.0) s *= 0.5f;       // hard turn: half speed or you meet a wall
-            else if (ang > 30.0) s *= 0.7f;  // moderate turn: the AI needs help here too
-        }
-
-        if (dist < 100.0f) s *= 0.6f;        // final approach
-        else if (dist < 250.0f) s *= 0.8f;
-
-        // The GTA driving AI cannot steer reliably above ~30 m/s (108 km/h).
-        // Above that it misses corners and drives straight into obstacles.
-        // Insane tier wants 36 m/s but the physics won't deliver it safely.
+        // Hard cap: the GTA driving AI cannot steer reliably above 30 m/s.
         if (s > 30.0f) s = 30.0f;
-        if (s < 10.0f) s = 10.0f;
         return s;
     }
 
