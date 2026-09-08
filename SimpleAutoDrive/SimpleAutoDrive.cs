@@ -366,16 +366,20 @@ public class SimpleAutoDrive : Script
         {
             float dot = Math.Max(-1f, Math.Min(1f, Vector3.Dot(dir.Normalized, fwd.Normalized)));
             double ang = Math.Acos(dot) * 180.0 / Math.PI;
-            // Highway curves routinely put the destination 20-40 degrees off-heading;
-            // that's not a turn, it's a road. Only genuinely sharp direction changes
-            // (city blocks, switchbacks, u-turn setups) get the slowdown.
-            if (ang > 60.0) s *= 0.6f;       // hard turn: genuinely need to slow
-            else if (ang > 35.0) s *= 0.8f;  // moderate turn: slight ease
+            // 30/45 degrees with real reductions: the GTA driving AI loses
+            // steering authority above ~100 km/h. Highway curves (under 30
+            // degrees) still go full speed; anything sharper actually slows.
+            if (ang > 45.0) s *= 0.5f;       // hard turn: half speed or you meet a wall
+            else if (ang > 30.0) s *= 0.7f;  // moderate turn: the AI needs help here too
         }
 
         if (dist < 100.0f) s *= 0.6f;        // final approach
         else if (dist < 250.0f) s *= 0.8f;
 
+        // The GTA driving AI cannot steer reliably above ~30 m/s (108 km/h).
+        // Above that it misses corners and drives straight into obstacles.
+        // Insane tier wants 36 m/s but the physics won't deliver it safely.
+        if (s > 30.0f) s = 30.0f;
         if (s < 10.0f) s = 10.0f;
         return s;
     }
