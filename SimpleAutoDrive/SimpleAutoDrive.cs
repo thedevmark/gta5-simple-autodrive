@@ -225,8 +225,14 @@ public class SimpleAutoDrive : Script
         }
         else _stalledSince = DateTime.MinValue;
 
-        bool wrongWay = _bestDistEver > 0f && dist > _bestDistEver + 150.0f;
-        bool longDead = (DateTime.UtcNow - _lastMeaningfulProgress).TotalSeconds > 90.0;
+        // Bridge approaches routinely take you 150-250m farther from the
+        // destination (around a bay, up an elevated on-ramp) before the
+        // crossing closes the gap. 150m was too tight and re-routed
+        // away from the bridge on the approach.
+        bool wrongWay = _bestDistEver > 0f && dist > _bestDistEver + 300.0f;
+        // Similarly: 90s without closing 25m is normal on long bridge
+        // approaches (the road runs lateral to the destination).
+        bool longDead = (DateTime.UtcNow - _lastMeaningfulProgress).TotalSeconds > 150.0;
 
         if (wrongWay || longDead || StalledTooLong(v, _stalledSince))
         {
