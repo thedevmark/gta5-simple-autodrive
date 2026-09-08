@@ -313,7 +313,10 @@ public class SimpleAutoDrive : Script
                     float along = Vector3.Dot(toOther, corridorDir);
                     if (along < 0f || along > corridorLength + 25.0f) continue;
                     float lateral = (toOther - corridorDir * along).Length();
-                    if (lateral < 6.0f) { oncomingInCorridor = true; break; }
+                    // One lane width (3.5m): on roads with a center turn lane, the
+                    // oncoming travel lane is ~3.5m further left than the corridor; a
+                    // 6m tolerance caught it and blocked every pass.
+                    if (lateral < 3.5f) { oncomingInCorridor = true; break; }
                 }
                 if (oncomingInCorridor) return; // wait for a gap
 
