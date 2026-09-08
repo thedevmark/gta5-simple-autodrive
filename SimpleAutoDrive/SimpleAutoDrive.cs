@@ -78,7 +78,7 @@ public class SimpleAutoDrive : Script
         _styles[0] = cfg.GetValue("MAIN", "StyleCruise", 786603);      // civil
         _styles[1] = cfg.GetValue("MAIN", "StyleBrisk", 1074528293);   // SHVDN Rushed
         _styles[2] = cfg.GetValue("MAIN", "StyleHurried", 1074528805); // + wrong-way-when-blocked
-        _styles[3] = cfg.GetValue("MAIN", "StyleInsane", 1074534949);  // + overtake bits
+        _styles[3] = cfg.GetValue("MAIN", "StyleInsane", 1074528805);  // wrong-way-when-blocked; overtake bits (2048|4096) removed - deterministic overtaker handles passing, style bits caused highway wrong-way
         _tier = cfg.GetValue("MAIN", "DefaultTier", 2);                // Hurried
         if (_tier < 0 || _tier > 3) _tier = 2;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
