@@ -16,9 +16,8 @@ Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing auto
 | Tier | Speed | Style |
 |---|---|---|
 | Cruise | ~58 km/h | civil — stops at lights, yields |
-| Brisk | ~76 km/h | SHVDN Rushed — passes slow traffic when convenient, stays in its lane |
-| Hurried (default) | ~94 km/h | Rushed + wrong-way-when-blocked |
-| Insane | ~130 km/h | + overtake-left/right bits — crosses into the oncoming lane to pass, single-lane roads included |
+| Brisk | ~76 km/h | SHVDN Rushed — passes when convenient |
+| Hurried (default) | ~94 km/h | + wrong-way-when-blocked — passes aggressively |
 
 Notifications show the tier name only; speeds live in the ini.
 
@@ -74,7 +73,7 @@ The drive command is reissued **every 2 seconds from the car's current position*
 [MAIN]
 ToggleKey=F6        # any System.Windows.Forms.Keys name
 TierKey=F9          # tap to cycle aggression tier
-DefaultTier=2       # 0 Cruise / 1 Brisk / 2 Hurried / 3 Insane - tier at startup
+DefaultTier=2       # 0 Cruise / 1 Brisk / 2 Hurried - tier at startup
 SpeedCruise=16.0    # meters per second (km/h = value x 3.6)
 SpeedBrisk=21.0
 SpeedHurried=26.0

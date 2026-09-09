@@ -17,26 +17,23 @@ using GTA.Native;
 // What the task controls: everything about actually driving.
 public class SimpleAutoDrive : Script
 {
-    static readonly string[] TierNames = { "Cruise", "Brisk", "Hurried", "Insane" };
+    static readonly string[] TierNames = { "Cruise", "Brisk", "Hurried" };
 
     bool _on;
     Vector3 _target;
     Keys _toggle;
     Keys _tierKey;
     int _tier;
-    readonly float[] _speeds = new float[4];
-    readonly int[] _styles = new int[4];
+    readonly float[] _speeds = new float[3];
+    readonly int[] _styles = new int[3];
     float _stopRange;
     bool _overtake;
-    bool _shootBlockers;
     Vector3 _knownWaypoint = Vector3.Zero;
 
     // overtake / shooting state
     bool _passing;
     Vector3 _passTarget;
     DateTime _passStart;
-    DateTime _lastShot = DateTime.MinValue;
-    int _shotsAtBlocker;
     DateTime _passCooldownUntil = DateTime.MinValue;
     int _passFailures;
 
@@ -59,31 +56,25 @@ public class SimpleAutoDrive : Script
         _speeds[0] = cfg.GetValue("MAIN", "SpeedCruise", 16.0f);
         _speeds[1] = cfg.GetValue("MAIN", "SpeedBrisk", 21.0f);
         _speeds[2] = cfg.GetValue("MAIN", "SpeedHurried", 26.0f);
-        _speeds[3] = cfg.GetValue("MAIN", "SpeedInsane", 28.0f);
         _styles[0] = cfg.GetValue("MAIN", "StyleCruise", 786603);      // civil
         _styles[1] = cfg.GetValue("MAIN", "StyleBrisk", 1074528293);   // SHVDN Rushed
         _styles[2] = cfg.GetValue("MAIN", "StyleHurried", 1074528805); // + wrong-way
-        _styles[3] = cfg.GetValue("MAIN", "StyleInsane", 1074528805);  // same style, ceiling is the cap
         _tier = cfg.GetValue("MAIN", "DefaultTier", 2);                // Hurried
-        if (_tier < 0 || _tier > 3) _tier = 2;
+        if (_tier < 0 || _tier > 2) _tier = 2;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
         _overtake = cfg.GetValue("MAIN", "Overtake", 1) == 1;
-        _shootBlockers = cfg.GetValue("MAIN", "ShootBlockers", 1) == 1;
 
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
         cfg.SetValue("MAIN", "TierKey", _tierKey.ToString());
         cfg.SetValue("MAIN", "SpeedCruise", _speeds[0]);
         cfg.SetValue("MAIN", "SpeedBrisk", _speeds[1]);
         cfg.SetValue("MAIN", "SpeedHurried", _speeds[2]);
-        cfg.SetValue("MAIN", "SpeedInsane", _speeds[3]);
         cfg.SetValue("MAIN", "StyleCruise", _styles[0]);
         cfg.SetValue("MAIN", "StyleBrisk", _styles[1]);
         cfg.SetValue("MAIN", "StyleHurried", _styles[2]);
-        cfg.SetValue("MAIN", "StyleInsane", _styles[3]);
         cfg.SetValue("MAIN", "DefaultTier", _tier);
         cfg.SetValue("MAIN", "StopRange", _stopRange);
         cfg.SetValue("MAIN", "Overtake", _overtake ? 1 : 0);
-        cfg.SetValue("MAIN", "ShootBlockers", _shootBlockers ? 1 : 0);
         cfg.Save();
 
         Interval = 500;
@@ -145,8 +136,6 @@ public class SimpleAutoDrive : Script
             return;
         }
 
-        if (v.Speed > 5.0f) _shotsAtBlocker = 0;
-
         // destination changed
         Vector3 wp = WaypointPos();
         if (wp != Vector3.Zero && _knownWaypoint != Vector3.Zero &&
@@ -201,22 +190,6 @@ public class SimpleAutoDrive : Script
         }
 
         if (blocker == null) return;
-
-        // Insane: shoot the blocker to make it move
-        if (_tier == 3 && _shootBlockers && _shotsAtBlocker < 3 &&
-            v.Speed < 2.0f &&
-            (DateTime.UtcNow - _lastShot).TotalMilliseconds > 3500)
-        {
-            _lastShot = DateTime.UtcNow;
-            _shotsAtBlocker++;
-            Vector3 from = v.Position + fwd.Normalized * 2.5f + Vector3.WorldUp * 0.7f;
-            Vector3 to = blocker.Position - blocker.ForwardVector.Normalized * 1.2f + Vector3.WorldUp * 0.6f;
-            Function.Call(Hash.SHOOT_SINGLE_BULLET_BETWEEN_COORDS,
-                from.X, from.Y, from.Z, to.X, to.Y, to.Z,
-                5.0f, false, 0x1B06D571, p, true, false, 1000.0f);
-            GTA.UI.Screen.ShowSubtitle("~r~Insane: clearing the road", 1500);
-            return;
-        }
 
         // check for oncoming traffic before passing
         if (DateTime.UtcNow < _passCooldownUntil) return;
@@ -277,7 +250,7 @@ public class SimpleAutoDrive : Script
 
     void CycleTier()
     {
-        _tier = (_tier + 1) % 4;
+        _tier = (_tier + 1) % 3;
         if (_on)
         {
             float speed = Math.Min(_speeds[_tier], MaxSafeSpeed);
@@ -362,7 +335,6 @@ public class SimpleAutoDrive : Script
         if (!_on) return;
         _on = false;
         _passing = false;
-        _shotsAtBlocker = 0;
         _passFailures = 0;
         _passCooldownUntil = DateTime.MinValue;
         Ped p = Game.Player.Character;
