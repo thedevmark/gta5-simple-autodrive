@@ -5,7 +5,7 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 
-// SimpleAutoDrive v5 — NPC chauffeur mode.
+// SimpleAutoDrive v5.1 — NPC chauffeur mode.
 //
 // The biggest UX change: F6 spawns an invisible NPC driver, moves you to
 // the passenger seat, and drives you to the waypoint. You can shoot,
@@ -31,6 +31,9 @@ public class SimpleAutoDrive : Script
     float _stopRange;
     bool _overtake;
     Vector3 _knownWaypoint = Vector3.Zero;
+    float _minDist = float.MaxValue;
+    DateTime _lastTaskAt = DateTime.MinValue;
+    int _forcedRetasks;
 
     Ped _driver;
     bool _passing;
@@ -138,8 +141,29 @@ public class SimpleAutoDrive : Script
         if (wp != Vector3.Zero && _knownWaypoint != Vector3.Zero &&
             wp.DistanceTo(_knownWaypoint) > 20.0f)
         {
+            _forcedRetasks = 0;
             Retask();
             return;
+        }
+
+        // Wrong-way watchdog: net distance ballooning while pointed away from
+        // the target means a missed turn — force one replan. Budgeted so a
+        // legitimate divided-highway turnaround (drive away to reach the next
+        // crossover) is never fought to death.
+        if (dist < _minDist) _minDist = dist;
+        if (dist > _minDist + 70.0f && _forcedRetasks < 3 &&
+            (DateTime.UtcNow - _lastTaskAt).TotalSeconds > 8.0)
+        {
+            Vector3 wdir = _target - v.Position; wdir.Z = 0f;
+            Vector3 wfwd = v.ForwardVector; wfwd.Z = 0f;
+            if (wdir.LengthSquared() > 1f && wfwd.LengthSquared() > 0.01f &&
+                Vector3.Dot(wdir.Normalized, wfwd.Normalized) < -0.25f)
+            {
+                _forcedRetasks++;
+                _minDist = dist;
+                Retask();
+                return;
+            }
         }
 
         if (_passing)
@@ -218,7 +242,8 @@ public class SimpleAutoDrive : Script
         _passStart = DateTime.UtcNow;
         Function.Call((Hash)0xE2A2AA2F659D77A7, driver, v,
             _passTarget.X, _passTarget.Y, _passTarget.Z,
-            Math.Min(_speeds[_tier], 20.0f), 1, 0, 1074528805, 2.5f, -1f);
+            Math.Min(_speeds[_tier], 20.0f), 1, v.Model.Hash,
+            1074528805, 2.5f, 60.0f);
     }
 
     void OnAborted(object sender, EventArgs e)
@@ -245,6 +270,7 @@ public class SimpleAutoDrive : Script
             }
 
             _on = true;
+            _forcedRetasks = 0;
 
             if (_chauffeurMode)
                 StartChauffeur(p, v);
@@ -297,10 +323,9 @@ public class SimpleAutoDrive : Script
     void CycleTier()
     {
         _tier = (_tier + 1) % 3;
-        Ped driver = GetActiveDriver();
-        if (_on && driver != null && driver.Exists())
+        if (_on && GetActiveDriver() != null)
         {
-            Function.Call(Hash.SET_DRIVE_TASK_MAX_CRUISE_SPEED, driver, _speeds[_tier], 1);
+            Retask();
         }
         GTA.UI.Screen.ShowSubtitle("AutoDrive - " + TierLabel(), 1500);
     }
@@ -336,26 +361,19 @@ public class SimpleAutoDrive : Script
 
     void Retask()
     {
-        Vector3 t = WaypointPos();
-        if (t == Vector3.Zero)
+        Vector3 raw = WaypointPos();
+        if (raw == Vector3.Zero)
         {
             if (_target == Vector3.Zero) { Stop(); return; }
         }
         else
         {
-            _target = t;
+            _target = raw;
         }
-        // Snap target to nearest road node: waypoints can be inside buildings,
-        // on sidewalks, in parking lots. The AI needs a road-reachable point.
-        OutputArgument snappedPos = new OutputArgument();
-        if (Function.Call<bool>(Hash.GET_CLOSEST_VEHICLE_NODE,
-            _target.X, _target.Y, _target.Z, snappedPos, 1, 3.0f, 0.0f))
-        {
-            _target = snappedPos.GetResult<Vector3>();
-        }
-
         _knownWaypoint = _target;
         _passing = false;
+        _minDist = float.MaxValue;
+        _lastTaskAt = DateTime.UtcNow;
 
         Ped driver = GetActiveDriver();
         Vehicle v = driver.CurrentVehicle;
@@ -364,8 +382,44 @@ public class SimpleAutoDrive : Script
         Function.Call(Hash.SET_DRIVER_ABILITY, driver, 1.0f);
         Function.Call(Hash.SET_DRIVER_AGGRESSIVENESS, driver, 1.0f);
 
+        float speed = _speeds[_tier];
+
+        // U-turn check BEFORE road-node snapping: if the destination is close
+        // and behind, the LONGRANGE task routes around the block instead of
+        // turning around. Short-range task makes tight maneuvers.
+        float distNow = v.Position.DistanceTo(raw);
+        if (raw != Vector3.Zero && distNow < 150.0f)
+        {
+            Vector3 dir = raw - v.Position; dir.Z = 0f;
+            Vector3 fwd = v.ForwardVector; fwd.Z = 0f;
+            if (dir.LengthSquared() > 1f && fwd.LengthSquared() > 0.01f)
+            {
+                float dot = Math.Max(-1f, Math.Min(1f, Vector3.Dot(dir.Normalized, fwd.Normalized)));
+                double ang = Math.Acos(dot) * 180.0 / Math.PI;
+                if (ang > 100.0)
+                {
+                    // straightLineDistance >= remaining distance = steer
+                    // directly at the target the whole way (verified sig:
+                    // ..., p6, vehicleModel, drivingMode, stopRange, straightLineDist)
+                    Function.Call((Hash)0xE2A2AA2F659D77A7, driver, v,
+                        raw.X, raw.Y, raw.Z, speed, 1, v.Model.Hash,
+                        _styles[_tier], 8.0f, 300.0f);
+                    return;
+                }
+            }
+        }
+
+        // Snap target to nearest road node for LONGRANGE: waypoints can be
+        // inside buildings, on sidewalks, in parking lots.
+        OutputArgument snappedPos = new OutputArgument();
+        if (Function.Call<bool>(Hash.GET_CLOSEST_VEHICLE_NODE,
+            _target.X, _target.Y, _target.Z, snappedPos, 1, 3.0f, 0.0f))
+        {
+            _target = snappedPos.GetResult<Vector3>();
+        }
+
         Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, driver, v,
-            _target.X, _target.Y, _target.Z, _speeds[_tier], _styles[_tier], _stopRange);
+            _target.X, _target.Y, _target.Z, speed, _styles[_tier], _stopRange);
     }
 
     void Stop()

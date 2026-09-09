@@ -1,6 +1,8 @@
 # SimpleAutoDrive — one-key waypoint autopilot for GTA V Enhanced
 
-Set a waypoint. Get in the driver's seat. **Tap F6** to drive. **Hold F6 for 2 seconds** to change how aggressively.
+Set a waypoint. Get in a car. **Tap F6** — an invisible chauffeur takes the wheel and drives you there while you sit in the passenger seat, free to shoot, use your phone, or watch the world go by. **Tap F9** to change how aggressively. Tap F6 again and you're back in the driver's seat.
+
+Chauffeur mode is the default (`ChauffeurMode=0` in the ini gives the classic player-drive autopilot). The chauffeur is a hidden NPC with maximum driver ability — the player ped's low default skill is what caused the routing loops and intersection overshoots in earlier versions.
 
 Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing autopilot mods misbehaved on our Enhanced setups (stale routes, ignored config), this one was written to do one job correctly.
 
@@ -8,8 +10,8 @@ Built for GTA V Enhanced (PC) on ScriptHookVDotNet 3 — after the existing auto
 
 | Input | Action |
 |---|---|
-| Tap F6 | autopilot on / off |
-| Tap F9 | cycle aggression tier (Cruise, Brisk, Hurried, Insane) — applies immediately, even mid-drive |
+| Tap F6 | autopilot on / off (chauffeur in, drive, chauffeur out, you back in the driver's seat) |
+| Tap F9 | cycle aggression tier (Cruise, Brisk, Hurried) — re-tasked immediately, even mid-drive |
 
 ## Aggression tiers
 
@@ -31,15 +33,17 @@ The player waypoint (purple marker) takes priority. Without one, the mod follows
 
 Style bits ask the engine nicely; the overtaker doesn't ask. When the car sags below 35% of tier speed behind a slower same-direction vehicle, the mod drives *directly* to a point ~35 m past the blocker in the oncoming lane, then resumes the waypoint task. A pass times out after 12 s and the normal evidence-based logic resumes. Toggle with `Overtake=1/0` in the ini (default on).
 
-## The v3 architecture
+## The routing rules
 
-The drive task is issued **once per destination**. Re-issuing the task is what a passenger perceives as recalculating, so it now happens only on events: the destination changed, the tier changed (style bits differ), an overtaking pass completed, or a genuine stall. Speed is not part of the task at all - it breathes continuously through `SET_DRIVE_TASK_MAX_CRUISE_SPEED`, scaled by how sharply the destination sits off the nose and ramped down on final approach. The result: no wall-clock replans, no mid-corner recalculations, and tier changes adjust speed live.
+The engine's long-range drive task follows the same road graph as the purple GPS line, and the graph would rather lap the block than turn a car around. Three rules keep the chauffeur honest:
 
-A stall means **stopped with clear road ahead** - a car in front within 14 m means a queue or a red light, which gets patience (45 s). A true stall dead-stops the car for 1.5 s and reissues once; three strikes on a trip hand control back with a notice.
+- **Task once per destination.** Re-issuing the driving task is what a passenger perceives as recalculating — done every tick it means the car never commits to a turn (it drives straight through intersections and loops around blocks). The task is re-issued only on events: destination changed, tier changed, overtaking pass completed, or the wrong-way watchdog fired.
+- **Close and behind means turn around.** If the destination is under 150 m and more than 100° off the nose, the mod switches from the pathfinding task to a direct-steer task — the chauffeur physically arcs to the point (three-point turns included) instead of asking the road graph.
+- **The wrong-way watchdog.** If the net distance to the destination grows by more than 70 m while the car is pointed away from it, a turn was missed — one forced replan, budgeted to three per destination so a legitimate highway turnaround (drive away to reach the next crossover) is never fought.
 
-## How it stays on route
+## Arrival
 
-The drive command is reissued **every 2 seconds from the car's current position**. There is no cached route to go stale and no wrong way to drive — the task is always "get from here to the waypoint." Arrival (default 15 m) stops the car dead and returns control.
+Waypoints can sit inside buildings or in parking lots, so the long-range task aims at the nearest road node to the marker. Arrival (default 35 m, `StopRange` in the ini) stops the car and returns the driver's seat to you.
 
 ## Behavior
 
@@ -47,7 +51,7 @@ The drive command is reissued **every 2 seconds from the car's current position*
 |---|---|
 | F6 tapped, waypoint set, you're driving | autopilot on, notification shows tier and speed |
 | F6 tapped again | autopilot off |
-| F9 tapped | next tier (Cruise → Hurried → Insane → Cruise) |
+| F9 tapped | next tier (Cruise → Brisk → Hurried → Cruise) |
 | Car reaches the waypoint | hard stop, "Arrived", control returned |
 | You leave the driver's seat | autopilot ends cleanly |
 | Scripts reloaded (Insert) | task cleared, never left running under you |
@@ -61,7 +65,7 @@ The drive command is reissued **every 2 seconds from the car's current position*
 
 ## Install
 
-1. Grab `SimpleAutoDrive-v1.0.0.zip` from [Releases](../../releases).
+1. Grab the latest `SimpleAutoDrive-vX.Y.Z.zip` from [Releases](../../releases).
 2. Drop `SimpleAutoDrive.dll` into your game's `scripts\` folder.
 3. Launch. `scripts\SimpleAutoDrive.ini` writes itself on first load.
 
@@ -74,17 +78,15 @@ The drive command is reissued **every 2 seconds from the car's current position*
 ToggleKey=F6        # any System.Windows.Forms.Keys name
 TierKey=F9          # tap to cycle aggression tier
 DefaultTier=2       # 0 Cruise / 1 Brisk / 2 Hurried - tier at startup
+ChauffeurMode=1     # 1 = NPC drives, you ride shotgun; 0 = you drive
 SpeedCruise=16.0    # meters per second (km/h = value x 3.6)
 SpeedBrisk=21.0
 SpeedHurried=26.0
-SpeedInsane=36.0
 StyleCruise=786603       # civil (stops at lights)
 StyleBrisk=1074528293    # SHVDN Rushed - passes when convenient
 StyleHurried=1074528805  # + wrong-way-when-blocked
-StyleInsane=1074534949   # + overtake-left/right bits
-StopRange=15.0      # meters to destination to count as arrived
-Overtake=1         # 1 = deterministic overtaker on, 0 = style bits only
-TaskIntervalMs=0     # 0 = off; a periodic heartbeat reissue resets maneuvers mid-flight
+StopRange=35.0      # meters to destination to count as arrived
+Overtake=1          # 1 = deterministic overtaker on, 0 = style bits only
 ```
 
 Edits apply on the next script reload (Insert by default in ScriptHookVDotNet).
@@ -103,7 +105,7 @@ Reference the ScriptHookVDotNet3.dll from the game you'll run it on. Any Roslyn 
 
 ## Driving style values
 
-The defaults are presets from the community's [driving-styles reference](https://gtaforums.com/topic/822314-guide-driving-styles/) — `786603` civil, `1074528293` the real SHVDN "Rushed" (brakes near moving cars but passes them), `1074528805` adds bit 512, which allows using the oncoming lane when your lane is blocked. Insane (`1074534949`) additionally sets bits 2048|4096, which field testing on the driving-styles thread associated with weaving left/right around blocked traffic — the difference between "will pass when convenient" and "will pass on a single-lane road". The old `2883621` you'll see in other mods ignores lights but mostly *queues* behind traffic — that's the value this mod replaced after its author watched it politely follow a van for three miles. Compose your own with the [driving style calculator](https://vespura.com/fivem/drivingstyle/).
+The defaults are presets from the community's [driving-styles reference](https://gtaforums.com/topic/822314-guide-driving-styles/) — `786603` civil, `1074528293` the real SHVDN "Rushed" (brakes near moving cars but passes them), `1074528805` adds bit 512, which allows using the oncoming lane when your lane is blocked. The old `2883621` you'll see in other mods ignores lights but mostly *queues* behind traffic — that's the value this mod replaced after its author watched it politely follow a van for three miles. Compose your own with the [driving style calculator](https://vespura.com/fivem/drivingstyle/).
 
 ## Notes
 
