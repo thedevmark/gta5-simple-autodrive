@@ -5,7 +5,7 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 
-// SimpleAutoDrive v6 — GPS line follower.
+// SimpleAutoDrive v6.0.1 — GPS line follower.
 //
 // The v1-v5 chauffeur handed the destination to the engine's drive task and
 // accepted whatever route the task's own pathfinder invented — which is not
@@ -148,6 +148,18 @@ public class SimpleAutoDrive : Script
         Vehicle v = GetActiveVehicle();
 
         if (v == null || !v.Exists())
+        {
+            Stop();
+            GTA.UI.Screen.ShowSubtitle("AutoDrive OFF", 1500);
+            return;
+        }
+
+        // player left the vehicle mid-drive (chauffeur keeps driving without
+        // them otherwise, and Stop() would summon them back later) — end the
+        // drive where they stand; the car stops right there
+        Ped p = Game.Player.Character;
+        if (p == null || !p.Exists() || p.CurrentVehicle == null ||
+            p.CurrentVehicle.Handle != v.Handle)
         {
             Stop();
             GTA.UI.Screen.ShowSubtitle("AutoDrive OFF", 1500);
@@ -506,10 +518,13 @@ public class SimpleAutoDrive : Script
         if (_chauffeurMode && _driver != null && _driver.Exists())
         {
             Vehicle v = _driver.CurrentVehicle;
-            // delete the NPC first to free the driver seat, then warp player in
+            // delete the NPC first to free the driver seat, then warp player
+            // in — ONLY if they're actually in this car; never teleport a
+            // player who left the vehicle back into it
             _driver.Delete();
             _driver = null;
-            if (v != null && v.Exists() && p != null && p.Exists())
+            if (v != null && v.Exists() && p != null && p.Exists() &&
+                p.CurrentVehicle != null && p.CurrentVehicle.Handle == v.Handle)
             {
                 Function.Call(Hash.SET_PED_INTO_VEHICLE, p, v, (int)VehicleSeat.Driver);
             }
