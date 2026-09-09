@@ -5,20 +5,45 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 
-// SimpleAutoDrive v5.1 — NPC chauffeur mode.
+// SimpleAutoDrive v6 — GPS line follower.
 //
-// The biggest UX change: F6 spawns an invisible NPC driver, moves you to
-// the passenger seat, and drives you to the waypoint. You can shoot,
-// use your phone, watch the world go by. On arrival or toggle-off, the
-// NPC vanishes and you're back in the driver's seat. The NPC has max
-// driver ability (willing to make left turns, tight maneuvers) which
-// fixes the routing issues from v3-v4 where the player ped's low default
-// driver skill caused loops and intersection overshoots.
+// The v1-v5 chauffeur handed the destination to the engine's drive task and
+// accepted whatever route the task's own pathfinder invented — which is not
+// always the route the purple GPS line on the player's minimap shows. When
+// they disagreed, the player watched the car lap a block the line never
+// suggested. v6 removes the disagreement at the source: the game's GPS route
+// IS readable (GET_POS_ALONG_GPS_TYPE_ROUTE), so the chauffeur samples the
+// line ahead of the car and drives segments along it. What you see on the
+// map is what the car does.
 //
-// Player-drive mode (ChauffeurMode=0 in ini) keeps the v4 behavior.
+// Segment routing: the target is the route point at a speed-scaled lookahead
+// (80-200 m). A task is issued once per segment and refreshed only on events
+// (target reached/passed, waypoint change, tier change, 4 s heartbeat) — the
+// task-churn lesson from v5.1 stands. When the line itself loops back — the
+// game router DOES plan turnarounds, as a U-turn on two-lane roads — the
+// segment target sits behind the nose, and that segment is issued as a
+// short-range direct-steer task so the car physically turns instead of
+// pathfinding around the block. If route sampling fails (no route computed
+// for this blip type), the same task issuance falls back to the v5 behavior:
+// long-range task to the road-node-snapped destination.
+//
+// Chauffeur mode (default): F6 spawns an invisible NPC driver with max
+// driver ability and moves you to the passenger seat — shoot, phone, watch
+// the world go by. ChauffeurMode=0 in the ini keeps player-drive mode.
 public class SimpleAutoDrive : Script
 {
     static readonly string[] TierNames = { "Cruise", "Brisk", "Hurried" };
+
+    // GET_POS_ALONG_GPS_TYPE_ROUTE — verified against the game's native defs:
+    // (Vector3* result, BOOL bStartAtPlayerPos, float distanceAlongRoute,
+    //  int slotType) -> BOOL. Slot 0 is the player waypoint route, slot 1
+    // the mission blip route (usage per Lafa2K/l2k_gps3d).
+    const ulong POS_ALONG_ROUTE = 0xF3162836C28F9DA5;
+    // GET_GPS_BLIP_ROUTE_LENGTH -> float
+    const ulong ROUTE_LENGTH = 0xBBB45C3CF5C8AA85;
+    // TASK_VEHICLE_DRIVE_TO_COORD — verified: (ped, veh, x, y, z, speed, p6,
+    // vehicleModel, drivingMode, stopRange, straightLineDistance).
+    const ulong DRIVE_TO_COORD = 0xE2A2AA2F659D77A7;
 
     bool _on;
     bool _chauffeurMode;
@@ -31,9 +56,12 @@ public class SimpleAutoDrive : Script
     float _stopRange;
     bool _overtake;
     Vector3 _knownWaypoint = Vector3.Zero;
-    float _minDist = float.MaxValue;
-    DateTime _lastTaskAt = DateTime.MinValue;
-    int _forcedRetasks;
+
+    // segment state (the driven target is a route sample, not the destination)
+    Vector3 _segTarget;
+    bool _segDirect;               // current segment is a direct-steer turnaround
+    DateTime _lastSegTask = DateTime.MinValue;
+    int _slot;                     // 0 = waypoint route, 1 = mission blip route
 
     Ped _driver;
     bool _passing;
@@ -117,7 +145,6 @@ public class SimpleAutoDrive : Script
     {
         if (!_on) return;
 
-        Ped p = Game.Player.Character;
         Vehicle v = GetActiveVehicle();
 
         if (v == null || !v.Exists())
@@ -141,29 +168,8 @@ public class SimpleAutoDrive : Script
         if (wp != Vector3.Zero && _knownWaypoint != Vector3.Zero &&
             wp.DistanceTo(_knownWaypoint) > 20.0f)
         {
-            _forcedRetasks = 0;
-            Retask();
+            IssueTask(v);
             return;
-        }
-
-        // Wrong-way watchdog: net distance ballooning while pointed away from
-        // the target means a missed turn — force one replan. Budgeted so a
-        // legitimate divided-highway turnaround (drive away to reach the next
-        // crossover) is never fought to death.
-        if (dist < _minDist) _minDist = dist;
-        if (dist > _minDist + 70.0f && _forcedRetasks < 3 &&
-            (DateTime.UtcNow - _lastTaskAt).TotalSeconds > 8.0)
-        {
-            Vector3 wdir = _target - v.Position; wdir.Z = 0f;
-            Vector3 wfwd = v.ForwardVector; wfwd.Z = 0f;
-            if (wdir.LengthSquared() > 1f && wfwd.LengthSquared() > 0.01f &&
-                Vector3.Dot(wdir.Normalized, wfwd.Normalized) < -0.25f)
-            {
-                _forcedRetasks++;
-                _minDist = dist;
-                Retask();
-                return;
-            }
         }
 
         if (_passing)
@@ -179,15 +185,134 @@ public class SimpleAutoDrive : Script
                     _passCooldownUntil = DateTime.UtcNow.AddSeconds(_passFailures >= 3 ? 30.0 : 6.0);
                 }
                 else _passFailures = 0;
-                Retask();
+                IssueTask(v);
             }
             return;
         }
 
-        if (_overtake && v.Speed < _speeds[_tier] * 0.70f)
+        // segment advance: near the target, past it, or the 4 s heartbeat
+        float segDist = _segTarget == Vector3.Zero ? float.MaxValue : v.Position.DistanceTo(_segTarget);
+        bool passed = segDist < 80.0f &&
+            Vector3.Dot((_segTarget - v.Position).Normalized, v.ForwardVector) < -0.2f;
+        bool beat = (DateTime.UtcNow - _lastSegTask).TotalSeconds > 4.0;
+        if (segDist < 45.0f || passed || beat)
+        {
+            IssueTask(v);
+            return;
+        }
+
+        if (_overtake && !_segDirect && v.Speed < _speeds[_tier] * 0.70f)
         {
             TryOvertake(v);
         }
+    }
+
+    Vector3 SampleRoute(float distance)
+    {
+        OutputArgument pos = new OutputArgument();
+        if (Function.Call<bool>((Hash)POS_ALONG_ROUTE, pos, true, distance, _slot))
+        {
+            Vector3 p = pos.GetResult<Vector3>();
+            if (p != Vector3.Zero) return p;
+        }
+        return Vector3.Zero;
+    }
+
+    // One task issuance: prefer the on-line sample at a speed-scaled lookahead
+    // (capped by remaining route length so the final sample converges on the
+    // destination), fall back to the v5 destination task when no route exists.
+    void IssueTask(Vehicle v)
+    {
+        Vector3 raw = WaypointPos();
+        if (raw == Vector3.Zero)
+        {
+            if (_target == Vector3.Zero) { Stop(); return; }
+        }
+        else
+        {
+            _target = raw;
+        }
+        _knownWaypoint = _target;
+        _passing = false;
+        _lastSegTask = DateTime.UtcNow;
+
+        Ped driver = GetActiveDriver();
+        if (driver == null || !driver.Exists()) { Stop(); return; }
+        Vehicle veh = driver.CurrentVehicle;
+        if (veh == null || !veh.Exists()) { Stop(); return; }
+
+        Function.Call(Hash.SET_DRIVER_ABILITY, driver, 1.0f);
+        Function.Call(Hash.SET_DRIVER_AGGRESSIVENESS, driver, 1.0f);
+
+        float speed = _speeds[_tier];
+        float lookahead = Math.Min(200.0f, Math.Max(80.0f, veh.Speed * 6.0f));
+        float routeLen = Function.Call<float>((Hash)ROUTE_LENGTH);
+        if (routeLen > 0.0f) lookahead = Math.Min(lookahead, routeLen);
+
+        Vector3 seg = SampleRoute(lookahead);
+
+        if (seg == Vector3.Zero)
+        {
+            // no readable route — v5 fallback: snapped destination, plus the
+            // close-and-behind direct steer for turnarounds
+            float a = NoseAngle(veh, _target);
+            if (a > 100.0f && veh.Position.DistanceTo(_target) < 150.0f)
+            {
+                _segTarget = _target;
+                _segDirect = true;
+                Function.Call((Hash)DRIVE_TO_COORD, driver, veh,
+                    _target.X, _target.Y, _target.Z, speed, 1, veh.Model.Hash,
+                    _styles[_tier], 8.0f, 300.0f);
+                return;
+            }
+            OutputArgument snappedPos = new OutputArgument();
+            if (Function.Call<bool>(Hash.GET_CLOSEST_VEHICLE_NODE,
+                _target.X, _target.Y, _target.Z, snappedPos, 1, 3.0f, 0.0f))
+            {
+                seg = snappedPos.GetResult<Vector3>();
+            }
+            else
+            {
+                seg = _target;
+            }
+            _segTarget = seg;
+            _segDirect = false;
+            Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, driver, veh,
+                seg.X, seg.Y, seg.Z, speed, _styles[_tier], _stopRange);
+            return;
+        }
+
+        // route is readable — drive the line. A segment target behind the
+        // nose means the line itself is looping back: direct-steer it (the
+        // physical U-turn) instead of letting the pathfinder lap the block.
+        _segTarget = seg;
+        float angle = NoseAngle(veh, seg);
+        float segDist = veh.Position.DistanceTo(seg);
+
+        if (angle > 100.0f && segDist < 160.0f)
+        {
+            _segDirect = true;
+            Function.Call((Hash)DRIVE_TO_COORD, driver, veh,
+                seg.X, seg.Y, seg.Z, speed, 1, veh.Model.Hash,
+                _styles[_tier], 8.0f, 300.0f);
+        }
+        else
+        {
+            _segDirect = false;
+            // small stopRange: the carrot is re-issued before it's reached, so
+            // the task must never enter its arrive-and-brake phase mid-route
+            Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, driver, veh,
+                seg.X, seg.Y, seg.Z, speed, _styles[_tier], 20.0f);
+        }
+    }
+
+    static float NoseAngle(Vehicle v, Vector3 to)
+    {
+        Vector3 dir = to - v.Position; dir.Z = 0f;
+        Vector3 fwd = v.ForwardVector; fwd.Z = 0f;
+        if (dir.LengthSquared() < 1f || fwd.LengthSquared() < 0.01f) return 0f;
+        float dot = Math.Max(-1f, Math.Min(1f, Vector3.Dot(dir.Normalized, fwd.Normalized)));
+        return (float)(Math.Acos(dot) * 180.0 / Math.PI);
     }
 
     Vehicle GetActiveVehicle()
@@ -240,7 +365,7 @@ public class SimpleAutoDrive : Script
 
         _passing = true;
         _passStart = DateTime.UtcNow;
-        Function.Call((Hash)0xE2A2AA2F659D77A7, driver, v,
+        Function.Call((Hash)DRIVE_TO_COORD, driver, v,
             _passTarget.X, _passTarget.Y, _passTarget.Z,
             Math.Min(_speeds[_tier], 20.0f), 1, v.Model.Hash,
             1074528805, 2.5f, 60.0f);
@@ -270,13 +395,14 @@ public class SimpleAutoDrive : Script
             }
 
             _on = true;
-            _forcedRetasks = 0;
+            _segTarget = Vector3.Zero;
+            _segDirect = false;
 
             if (_chauffeurMode)
                 StartChauffeur(p, v);
 
             GTA.UI.Screen.ShowSubtitle("~g~AutoDrive ON~w~ - " + TierLabel(), 1500);
-            Retask();
+            IssueTask(v);
         }
         else
         {
@@ -323,9 +449,10 @@ public class SimpleAutoDrive : Script
     void CycleTier()
     {
         _tier = (_tier + 1) % 3;
-        if (_on && GetActiveDriver() != null)
+        if (_on)
         {
-            Retask();
+            Vehicle v = GetActiveVehicle();
+            if (v != null && v.Exists()) IssueTask(v);
         }
         GTA.UI.Screen.ShowSubtitle("AutoDrive - " + TierLabel(), 1500);
     }
@@ -346,80 +473,23 @@ public class SimpleAutoDrive : Script
     {
         int blip = Function.Call<int>(Hash.GET_FIRST_BLIP_INFO_ID, 8);
         if (Function.Call<bool>(Hash.DOES_BLIP_EXIST, blip))
+        {
+            _slot = 0;
             return Function.Call<Vector3>(Hash.GET_BLIP_INFO_ID_COORD, blip);
+        }
 
         blip = Function.Call<int>(Hash.GET_FIRST_BLIP_INFO_ID, 1);
         while (Function.Call<bool>(Hash.DOES_BLIP_EXIST, blip))
         {
             Vector3 c = Function.Call<Vector3>(Hash.GET_BLIP_INFO_ID_COORD, blip);
             if (Game.Player.Character.Position.DistanceTo(c) > 50.0f)
+            {
+                _slot = 1;
                 return c;
+            }
             blip = Function.Call<int>(Hash.GET_NEXT_BLIP_INFO_ID, blip);
         }
         return Vector3.Zero;
-    }
-
-    void Retask()
-    {
-        Vector3 raw = WaypointPos();
-        if (raw == Vector3.Zero)
-        {
-            if (_target == Vector3.Zero) { Stop(); return; }
-        }
-        else
-        {
-            _target = raw;
-        }
-        _knownWaypoint = _target;
-        _passing = false;
-        _minDist = float.MaxValue;
-        _lastTaskAt = DateTime.UtcNow;
-
-        Ped driver = GetActiveDriver();
-        Vehicle v = driver.CurrentVehicle;
-        if (v == null || !v.Exists()) { Stop(); return; }
-
-        Function.Call(Hash.SET_DRIVER_ABILITY, driver, 1.0f);
-        Function.Call(Hash.SET_DRIVER_AGGRESSIVENESS, driver, 1.0f);
-
-        float speed = _speeds[_tier];
-
-        // U-turn check BEFORE road-node snapping: if the destination is close
-        // and behind, the LONGRANGE task routes around the block instead of
-        // turning around. Short-range task makes tight maneuvers.
-        float distNow = v.Position.DistanceTo(raw);
-        if (raw != Vector3.Zero && distNow < 150.0f)
-        {
-            Vector3 dir = raw - v.Position; dir.Z = 0f;
-            Vector3 fwd = v.ForwardVector; fwd.Z = 0f;
-            if (dir.LengthSquared() > 1f && fwd.LengthSquared() > 0.01f)
-            {
-                float dot = Math.Max(-1f, Math.Min(1f, Vector3.Dot(dir.Normalized, fwd.Normalized)));
-                double ang = Math.Acos(dot) * 180.0 / Math.PI;
-                if (ang > 100.0)
-                {
-                    // straightLineDistance >= remaining distance = steer
-                    // directly at the target the whole way (verified sig:
-                    // ..., p6, vehicleModel, drivingMode, stopRange, straightLineDist)
-                    Function.Call((Hash)0xE2A2AA2F659D77A7, driver, v,
-                        raw.X, raw.Y, raw.Z, speed, 1, v.Model.Hash,
-                        _styles[_tier], 8.0f, 300.0f);
-                    return;
-                }
-            }
-        }
-
-        // Snap target to nearest road node for LONGRANGE: waypoints can be
-        // inside buildings, on sidewalks, in parking lots.
-        OutputArgument snappedPos = new OutputArgument();
-        if (Function.Call<bool>(Hash.GET_CLOSEST_VEHICLE_NODE,
-            _target.X, _target.Y, _target.Z, snappedPos, 1, 3.0f, 0.0f))
-        {
-            _target = snappedPos.GetResult<Vector3>();
-        }
-
-        Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, driver, v,
-            _target.X, _target.Y, _target.Z, speed, _styles[_tier], _stopRange);
     }
 
     void Stop()
@@ -429,6 +499,7 @@ public class SimpleAutoDrive : Script
         _passing = false;
         _passFailures = 0;
         _passCooldownUntil = DateTime.MinValue;
+        _segTarget = Vector3.Zero;
 
         Ped p = Game.Player.Character;
 

@@ -33,13 +33,13 @@ The player waypoint (purple marker) takes priority. Without one, the mod follows
 
 Style bits ask the engine nicely; the overtaker doesn't ask. When the car sags below 35% of tier speed behind a slower same-direction vehicle, the mod drives *directly* to a point ~35 m past the blocker in the oncoming lane, then resumes the waypoint task. A pass times out after 12 s and the normal evidence-based logic resumes. Toggle with `Overtake=1/0` in the ini (default on).
 
-## The routing rules
+## The routing rules (v6 — the chauffeur follows the line)
 
-The engine's long-range drive task follows the same road graph as the purple GPS line, and the graph would rather lap the block than turn a car around. Three rules keep the chauffeur honest:
+Earlier versions handed the destination to the engine's drive task and accepted whatever route its own pathfinder invented — which is not always the route the purple GPS line on your minimap shows. When they disagreed, you watched the car lap a block the line never suggested. v6 removes the disagreement at the source: **the game's GPS route is readable** (`GET_POS_ALONG_GPS_TYPE_ROUTE`, slot 0 for your waypoint, slot 1 for mission objectives), so the chauffeur samples the line ahead of the car and drives segments along it. What the map shows is what the car does.
 
-- **Task once per destination.** Re-issuing the driving task is what a passenger perceives as recalculating — done every tick it means the car never commits to a turn (it drives straight through intersections and loops around blocks). The task is re-issued only on events: destination changed, tier changed, overtaking pass completed, or the wrong-way watchdog fired.
-- **Close and behind means turn around.** If the destination is under 150 m and more than 100° off the nose, the mod switches from the pathfinding task to a direct-steer task — the chauffeur physically arcs to the point (three-point turns included) instead of asking the road graph.
-- **The wrong-way watchdog.** If the net distance to the destination grows by more than 70 m while the car is pointed away from it, a turn was missed — one forced replan, budgeted to three per destination so a legitimate highway turnaround (drive away to reach the next crossover) is never fought.
+- **Carrot segments.** The target is the route point at a speed-scaled lookahead (80-200 m, capped by remaining route length so the final segment converges on the destination). A task is issued once per segment and refreshed only when the target is reached or passed, the waypoint changes, the tier changes, or a 4 s heartbeat — a task re-issued every tick never commits to a turn (the v5.1 lesson).
+- **The line's turnarounds are executed physically.** The game router does plan U-turns (on two-lane roads, the line loops back immediately). Those segments sit behind the car's nose, so they're issued as short-range direct-steer tasks — the chauffeur physically arcs, three-point turns included, instead of pathfinding around the block.
+- **No route, no problem.** If route sampling fails for a blip type, each task issuance silently falls back to the v5 behavior: long-range task to the road-node-snapped destination, with the close-and-behind direct steer.
 
 ## Arrival
 
