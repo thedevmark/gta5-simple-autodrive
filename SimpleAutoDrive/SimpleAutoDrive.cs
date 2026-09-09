@@ -369,12 +369,13 @@ public class SimpleAutoDrive : Script
         if (_chauffeurMode && _driver != null && _driver.Exists())
         {
             Vehicle v = _driver.CurrentVehicle;
+            // delete the NPC first to free the driver seat, then warp player in
+            _driver.Delete();
+            _driver = null;
             if (v != null && v.Exists() && p != null && p.Exists())
             {
                 Function.Call(Hash.SET_PED_INTO_VEHICLE, p, v, (int)VehicleSeat.Driver);
             }
-            _driver.Delete();
-            _driver = null;
         }
         else if (p != null && p.Exists())
         {
