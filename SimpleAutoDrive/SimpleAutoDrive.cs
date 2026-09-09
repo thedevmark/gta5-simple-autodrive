@@ -5,7 +5,7 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 
-// SimpleAutoDrive v6.0.1 — GPS line follower.
+// SimpleAutoDrive v6.0.2 — GPS line follower.
 //
 // The v1-v5 chauffeur handed the destination to the engine's drive task and
 // accepted whatever route the task's own pathfinder invented — which is not
@@ -61,6 +61,7 @@ public class SimpleAutoDrive : Script
     Vector3 _segTarget;
     bool _segDirect;               // current segment is a direct-steer turnaround
     DateTime _lastSegTask = DateTime.MinValue;
+    DateTime _startedAt = DateTime.MinValue;
     int _slot;                     // 0 = waypoint route, 1 = mission blip route
 
     Ped _driver;
@@ -158,8 +159,9 @@ public class SimpleAutoDrive : Script
         // them otherwise, and Stop() would summon them back later) — end the
         // drive where they stand; the car stops right there
         Ped p = Game.Player.Character;
-        if (p == null || !p.Exists() || p.CurrentVehicle == null ||
-            p.CurrentVehicle.Handle != v.Handle)
+        if ((p == null || !p.Exists() || p.CurrentVehicle == null ||
+            p.CurrentVehicle.Handle != v.Handle) &&
+            (DateTime.UtcNow - _startedAt).TotalSeconds > 2.0)
         {
             Stop();
             GTA.UI.Screen.ShowSubtitle("AutoDrive OFF", 1500);
@@ -409,6 +411,7 @@ public class SimpleAutoDrive : Script
             _on = true;
             _segTarget = Vector3.Zero;
             _segDirect = false;
+            _startedAt = DateTime.UtcNow;
 
             if (_chauffeurMode)
                 StartChauffeur(p, v);
@@ -425,8 +428,28 @@ public class SimpleAutoDrive : Script
 
     void StartChauffeur(Ped player, Vehicle vehicle)
     {
-        // move player to passenger
-        Function.Call(Hash.SET_PED_INTO_VEHICLE, player, vehicle, (int)VehicleSeat.Passenger);
+        // seat the player somewhere that isn't the driver seat — some
+        // vehicles (garbage/service trucks) have no passenger seat at all,
+        // and warping to a nonexistent seat ejects the player to the street
+        VehicleSeat seat = VehicleSeat.None;
+        if (vehicle.IsSeatFree(VehicleSeat.Passenger)) seat = VehicleSeat.Passenger;
+        else if (vehicle.IsSeatFree(VehicleSeat.LeftRear)) seat = VehicleSeat.LeftRear;
+        else if (vehicle.IsSeatFree(VehicleSeat.RightRear)) seat = VehicleSeat.RightRear;
+
+        if (seat == VehicleSeat.None)
+        {
+            _chauffeurMode = false;
+            GTA.UI.Screen.ShowSubtitle("~y~No free seat - you drive", 1500);
+            return;
+        }
+        Function.Call(Hash.SET_PED_INTO_VEHICLE, player, vehicle, (int)seat);
+        if (player.CurrentVehicle == null || player.CurrentVehicle.Handle != vehicle.Handle)
+        {
+            // seat move failed — keep the player driving, no chauffeur
+            _chauffeurMode = false;
+            GTA.UI.Screen.ShowSubtitle("~y~No free seat - you drive", 1500);
+            return;
+        }
 
         // spawn driver
         _driver = vehicle.CreatePedOnSeat(VehicleSeat.Driver, PedHash.Blackops01SMY);
