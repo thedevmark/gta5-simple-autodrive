@@ -283,6 +283,9 @@ public class SimpleAutoDrive : Script
 
         _driver.IsPersistent = true;
         _driver.BlockPermanentEvents = true;
+
+        // let the player control the radio from the passenger seat
+        Function.Call(Hash.SET_VEH_HAS_NORMAL_RADIO, vehicle);
         _driver.CanBeDraggedOutOfVehicle = false;
         _driver.CanBeTargetted = false;
         _driver.IsInvincible = true;
