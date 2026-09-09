@@ -5,7 +5,7 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 
-// SimpleAutoDrive v6.0.2 — GPS line follower.
+// SimpleAutoDrive v6.0.3 — GPS line follower.
 //
 // The v1-v5 chauffeur handed the destination to the engine's drive task and
 // accepted whatever route the task's own pathfinder invented — which is not
@@ -114,6 +114,16 @@ public class SimpleAutoDrive : Script
         Aborted += OnAborted;
     }
 
+    static void Log(string s)
+    {
+        try
+        {
+            File.AppendAllText(Path.Combine("scripts", "SimpleAutoDrive.log"),
+                DateTime.Now.ToString("HH:mm:ss.fff ") + s + Environment.NewLine);
+        }
+        catch { }
+    }
+
     static Keys ParseKey(string name, Keys fallback)
     {
         Keys k;
@@ -150,6 +160,7 @@ public class SimpleAutoDrive : Script
 
         if (v == null || !v.Exists())
         {
+            Log("auto-stop: vehicle gone");
             Stop();
             GTA.UI.Screen.ShowSubtitle("AutoDrive OFF", 1500);
             return;
@@ -163,6 +174,9 @@ public class SimpleAutoDrive : Script
             p.CurrentVehicle.Handle != v.Handle) &&
             (DateTime.UtcNow - _startedAt).TotalSeconds > 2.0)
         {
+            Log("auto-stop: player not in vehicle (curveh " +
+                (p != null && p.CurrentVehicle != null ? p.CurrentVehicle.Handle.ToString() : "none") +
+                ", drive veh " + v.Handle.ToString() + ")");
             Stop();
             GTA.UI.Screen.ShowSubtitle("AutoDrive OFF", 1500);
             return;
@@ -267,6 +281,7 @@ public class SimpleAutoDrive : Script
 
         if (seg == Vector3.Zero)
         {
+            Log("task: fallback (no route sample, slot " + _slot + ")");
             // no readable route — v5 fallback: snapped destination, plus the
             // close-and-behind direct steer for turnarounds
             float a = NoseAngle(veh, _target);
@@ -306,6 +321,7 @@ public class SimpleAutoDrive : Script
         if (angle > 100.0f && segDist < 160.0f)
         {
             _segDirect = true;
+            Log("task: route direct-steer, angle " + (int)angle + " dist " + (int)segDist);
             Function.Call((Hash)DRIVE_TO_COORD, driver, veh,
                 seg.X, seg.Y, seg.Z, speed, 1, veh.Model.Hash,
                 _styles[_tier], 8.0f, 300.0f);
@@ -313,6 +329,7 @@ public class SimpleAutoDrive : Script
         else
         {
             _segDirect = false;
+            Log("task: route longrange " + (int)segDist + "m, slot " + _slot);
             // small stopRange: the carrot is re-issued before it's reached, so
             // the task must never enter its arrive-and-brake phase mid-route
             Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, driver, veh,
@@ -439,22 +456,18 @@ public class SimpleAutoDrive : Script
         if (seat == VehicleSeat.None)
         {
             _chauffeurMode = false;
+            Log("chauffeur: no free seat, player-drive mode");
             GTA.UI.Screen.ShowSubtitle("~y~No free seat - you drive", 1500);
             return;
         }
+        Log("chauffeur: seat " + (int)seat);
         Function.Call(Hash.SET_PED_INTO_VEHICLE, player, vehicle, (int)seat);
-        if (player.CurrentVehicle == null || player.CurrentVehicle.Handle != vehicle.Handle)
-        {
-            // seat move failed — keep the player driving, no chauffeur
-            _chauffeurMode = false;
-            GTA.UI.Screen.ShowSubtitle("~y~No free seat - you drive", 1500);
-            return;
-        }
 
         // spawn driver
         _driver = vehicle.CreatePedOnSeat(VehicleSeat.Driver, PedHash.Blackops01SMY);
         if (_driver == null || !_driver.Exists())
         {
+            Log("chauffeur: CreatePedOnSeat failed, street fallback");
             _driver = World.CreatePed(PedHash.Blackops01SMY, vehicle.Position + vehicle.RightVector * 3f);
             if (_driver != null && _driver.Exists())
                 Function.Call(Hash.SET_PED_INTO_VEHICLE, _driver, vehicle, (int)VehicleSeat.Driver);
@@ -463,10 +476,14 @@ public class SimpleAutoDrive : Script
         if (_driver == null || !_driver.Exists())
         {
             _chauffeurMode = false;
+            Log("chauffeur: NPC creation failed entirely, player-drive mode");
             Function.Call(Hash.SET_PED_INTO_VEHICLE, player, vehicle, (int)VehicleSeat.Driver);
             GTA.UI.Screen.ShowSubtitle("~y~Chauffeur failed, player-drive mode", 1500);
             return;
         }
+        Log("chauffeur: npc up, player seat " +
+            (player.CurrentVehicle != null ? player.CurrentVehicle.Handle.ToString() : "none") +
+            " veh " + vehicle.Handle.ToString());
 
         _driver.IsPersistent = true;
         _driver.BlockPermanentEvents = true;
