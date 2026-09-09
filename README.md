@@ -29,17 +29,13 @@ Every speed and style is editable in the ini.
 
 The player waypoint (purple marker) takes priority. Without one, the mod follows the nearest **mission objective blip farther than 50 m** - so it works during missions, and it re-targets automatically as the objective moves. Contact markers beside you in free roam are ignored via the 50 m rule.
 
-## Deterministic overtaker
+## The driving model (v7 - the proven recipe)
 
-Style bits ask the engine nicely; the overtaker doesn't ask. When the car sags below 35% of tier speed behind a slower same-direction vehicle, the mod drives *directly* to a point ~35 m past the blocker in the oncoming lane, then resumes the waypoint task. A pass times out after 12 s and the normal evidence-based logic resumes. Toggle with `Overtake=1/0` in the ini (default on).
+One `TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE` to the destination with a speed and a driving style - the same model the long-running community autopilots have shipped for years. The engine's pathfinder follows the road graph end to end; it never beelines through geometry.
 
-## The routing rules (v6 — the chauffeur follows the line)
-
-Earlier versions handed the destination to the engine's drive task and accepted whatever route its own pathfinder invented — which is not always the route the purple GPS line on your minimap shows. When they disagreed, you watched the car lap a block the line never suggested. v6 removes the disagreement at the source: **the game's GPS route is readable** (`GET_POS_ALONG_GPS_TYPE_ROUTE`, slot 0 for your waypoint, slot 1 for mission objectives), so the chauffeur samples the line ahead of the car and drives segments along it. What the map shows is what the car does.
-
-- **Carrot segments.** The target is the route point at a speed-scaled lookahead (80-200 m, capped by remaining route length so the final segment converges on the destination). A task is issued once per segment and refreshed only when the target is reached or passed, the waypoint changes, the tier changes, or a 4 s heartbeat — a task re-issued every tick never commits to a turn (the v5.1 lesson).
-- **The line's turnarounds are executed physically.** The game router does plan U-turns (on two-lane roads, the line loops back immediately). Those segments sit behind the car's nose, so they're issued as short-range direct-steer tasks — the chauffeur physically arcs, three-point turns included, instead of pathfinding around the block.
-- **No route, no problem.** If route sampling fails for a blip type, each task issuance silently falls back to the v5 behavior: long-range task to the road-node-snapped destination, with the close-and-behind direct steer.
+- **The task is issued once per destination** and re-issued only when the destination or tier changes. Nothing else touches the driving - no speed interference, no periodic re-issues, no route surgery. (A driving task restarted every tick never commits to a turn, and short-range "direct steer" tasks cut straight lines through walls - both lessons are paid for.)
+- **Arrival is a distance check** (default 35 m), so a waypoint inside a building still ends the trip cleanly at the nearest road instead of orbiting.
+- **Mission objectives work without a waypoint** - the nearest objective blip over 50 m becomes the destination.
 
 ## Arrival
 
@@ -86,7 +82,6 @@ StyleCruise=786603       # civil (stops at lights)
 StyleBrisk=1074528293    # SHVDN Rushed - passes when convenient
 StyleHurried=1074528805  # + wrong-way-when-blocked
 StopRange=35.0      # meters to destination to count as arrived
-Overtake=1          # 1 = deterministic overtaker on, 0 = style bits only
 ```
 
 Edits apply on the next script reload (Insert by default in ScriptHookVDotNet).
