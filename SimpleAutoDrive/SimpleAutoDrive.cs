@@ -470,9 +470,33 @@ public class SimpleAutoDrive : Script
         if (loopBreaker)
             GTA.UI.Screen.ShowSubtitle("~y~AutoDrive: rerouting (stall detected)", 1500);
 
-        Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, p, v,
-            _target.X, _target.Y, _target.Z, DesiredSpeed(v, p.Position.DistanceTo(_target)),
-            style, _stopRange);
+        // Destination close and behind us? The LONGRANGE task routes around
+        // the block instead of U-turning — it's built for cross-map trips, not
+        // "the waypoint is 80m back the way we came." The short-range task
+        // (TASK_VEHICLE_DRIVE_TO_COORD) is more willing to make tight maneuvers.
+        float distNow2 = v.Position.DistanceTo(_target);
+        Vector3 dir = _target - v.Position; dir.Z = 0f;
+        Vector3 fwd = v.ForwardVector; fwd.Z = 0f;
+        bool needUTurn = false;
+        if (dir.LengthSquared() > 1f && fwd.LengthSquared() > 0.01f && distNow2 < 150.0f)
+        {
+            float dot = Math.Max(-1f, Math.Min(1f, Vector3.Dot(dir.Normalized, fwd.Normalized)));
+            double ang = Math.Acos(dot) * 180.0 / Math.PI;
+            needUTurn = ang > 120.0;
+        }
+
+        if (needUTurn)
+        {
+            Function.Call((Hash)0xE2A2AA2F659D77A7, p, v,  // TASK_VEHICLE_DRIVE_TO_COORD (short-range)
+                _target.X, _target.Y, _target.Z,
+                DesiredSpeed(v, distNow2), 1, 0, style, _stopRange, -1f);
+        }
+        else
+        {
+            Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, p, v,
+                _target.X, _target.Y, _target.Z, DesiredSpeed(v, distNow2),
+                style, _stopRange);
+        }
     }
 
     void Stop()
