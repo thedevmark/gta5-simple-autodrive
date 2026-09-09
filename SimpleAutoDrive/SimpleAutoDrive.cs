@@ -5,45 +5,25 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 
-// SimpleAutoDrive v6.0.4 — GPS line follower.
+// SimpleAutoDrive v7 — the proven recipe.
 //
-// The v1-v5 chauffeur handed the destination to the engine's drive task and
-// accepted whatever route the task's own pathfinder invented — which is not
-// always the route the purple GPS line on the player's minimap shows. When
-// they disagreed, the player watched the car lap a block the line never
-// suggested. v6 removes the disagreement at the source: the game's GPS route
-// IS readable (GET_POS_ALONG_GPS_TYPE_ROUTE), so the chauffeur samples the
-// line ahead of the car and drives segments along it. What you see on the
-// map is what the car does.
+// v6's line-following architecture (route sampling, segment streaming,
+// direct-steer turnaround branches) caused wall crashes: a direct-steer
+// task with a large straightLineDistance steers STRAIGHT at its target
+// regardless of geometry, and re-issued short segments kept disturbing
+// the task's own route commitment. All of it is removed.
 //
-// Segment routing: the target is the route point at a speed-scaled lookahead
-// (80-200 m). A task is issued once per segment and refreshed only on events
-// (target reached/passed, waypoint change, tier change, 4 s heartbeat) — the
-// task-churn lesson from v5.1 stands. When the line itself loops back — the
-// game router DOES plan turnarounds, as a U-turn on two-lane roads — the
-// segment target sits behind the nose, and that segment is issued as a
-// short-range direct-steer task so the car physically turns instead of
-// pathfinding around the block. If route sampling fails (no route computed
-// for this blip type), the same task issuance falls back to the v5 behavior:
-// long-range task to the road-node-snapped destination.
-//
-// Chauffeur mode (default): F6 spawns an invisible NPC driver with max
-// driver ability and moves you to the passenger seat — shoot, phone, watch
-// the world go by. ChauffeurMode=0 in the ini keeps player-drive mode.
+// v7 is the same model as the long-running community autopilots: ONE
+// TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE to the destination with a speed
+// and a driving style, re-issued ONLY when the destination or tier
+// changes. The engine's pathfinder follows the road graph end to end —
+// it never beelines through geometry. Arrival is a distance check, so
+// unreachable waypoint interiors still end the trip cleanly at the
+// nearest road. The chauffeur layer (invisible max-skill NPC drives,
+// you ride as passenger) is kept — field-log verified working.
 public class SimpleAutoDrive : Script
 {
     static readonly string[] TierNames = { "Cruise", "Brisk", "Hurried" };
-
-    // GET_POS_ALONG_GPS_TYPE_ROUTE — verified against the game's native defs:
-    // (Vector3* result, BOOL bStartAtPlayerPos, float distanceAlongRoute,
-    //  int slotType) -> BOOL. Slot 0 is the player waypoint route, slot 1
-    // the mission blip route (usage per Lafa2K/l2k_gps3d).
-    const ulong POS_ALONG_ROUTE = 0xF3162836C28F9DA5;
-    // GET_GPS_BLIP_ROUTE_LENGTH -> float
-    const ulong ROUTE_LENGTH = 0xBBB45C3CF5C8AA85;
-    // TASK_VEHICLE_DRIVE_TO_COORD — verified: (ped, veh, x, y, z, speed, p6,
-    // vehicleModel, drivingMode, stopRange, straightLineDistance).
-    const ulong DRIVE_TO_COORD = 0xE2A2AA2F659D77A7;
 
     bool _on;
     bool _chauffeurMode;
@@ -54,23 +34,11 @@ public class SimpleAutoDrive : Script
     readonly float[] _speeds = new float[3];
     readonly int[] _styles = new int[3];
     float _stopRange;
-    bool _overtake;
     Vector3 _knownWaypoint = Vector3.Zero;
-
-    // segment state (the driven target is a route sample, not the destination)
-    Vector3 _segTarget;
-    bool _segDirect;               // current segment is a direct-steer turnaround
-    DateTime _lastSegTask = DateTime.MinValue;
     DateTime _startedAt = DateTime.MinValue;
-    int _slot;                     // 0 = waypoint route, 1 = mission blip route
+    int _slot;
 
     Ped _driver;
-    bool _passing;
-    Vector3 _passTarget;
-    DateTime _passStart;
-    DateTime _passCooldownUntil = DateTime.MinValue;
-    int _passFailures;
-
     readonly bool[] _keyLatched = new bool[2];
 
     public SimpleAutoDrive()
@@ -91,7 +59,6 @@ public class SimpleAutoDrive : Script
         _tier = cfg.GetValue("MAIN", "DefaultTier", 2);
         if (_tier < 0 || _tier > 2) _tier = 2;
         _stopRange = cfg.GetValue("MAIN", "StopRange", 35.0f);
-        _overtake = cfg.GetValue("MAIN", "Overtake", 1) == 1;
 
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
         cfg.SetValue("MAIN", "TierKey", _tierKey.ToString());
@@ -104,7 +71,6 @@ public class SimpleAutoDrive : Script
         cfg.SetValue("MAIN", "StyleHurried", _styles[2]);
         cfg.SetValue("MAIN", "DefaultTier", _tier);
         cfg.SetValue("MAIN", "StopRange", _stopRange);
-        cfg.SetValue("MAIN", "Overtake", _overtake ? 1 : 0);
         cfg.Save();
 
         Interval = 500;
@@ -166,91 +132,39 @@ public class SimpleAutoDrive : Script
             return;
         }
 
-        // player left the vehicle mid-drive (chauffeur keeps driving without
-        // them otherwise, and Stop() would summon them back later) — end the
-        // drive where they stand; the car stops right there
         Ped p = Game.Player.Character;
         if ((p == null || !p.Exists() || p.CurrentVehicle == null ||
             p.CurrentVehicle.Handle != v.Handle) &&
             (DateTime.UtcNow - _startedAt).TotalSeconds > 2.0)
         {
-            Log("auto-stop: player not in vehicle (curveh " +
-                (p != null && p.CurrentVehicle != null ? p.CurrentVehicle.Handle.ToString() : "none") +
-                ", drive veh " + v.Handle.ToString() + ")");
+            Log("auto-stop: player not in vehicle");
             Stop();
             GTA.UI.Screen.ShowSubtitle("AutoDrive OFF", 1500);
             return;
         }
 
-        float dist = v.Position.DistanceTo(_target);
-
-        if (dist < _stopRange)
+        if (v.Position.DistanceTo(_target) < _stopRange)
         {
             Function.Call(Hash.SET_VEHICLE_FORWARD_SPEED, v, 0.0f);
+            Log("arrived");
             Stop();
             GTA.UI.Screen.ShowSubtitle("~g~Arrived", 2000);
             return;
         }
 
+        // the ONLY re-issuing trigger: the destination itself moved
         Vector3 wp = WaypointPos();
         if (wp != Vector3.Zero && _knownWaypoint != Vector3.Zero &&
             wp.DistanceTo(_knownWaypoint) > 20.0f)
         {
-            IssueTask(v);
-            return;
-        }
-
-        if (_passing)
-        {
-            bool arrived = v.Position.DistanceTo(_passTarget) < 12.0f;
-            bool timedOut = (DateTime.UtcNow - _passStart).TotalSeconds > 12.0;
-            if (arrived || timedOut)
-            {
-                _passing = false;
-                if (timedOut && !arrived)
-                {
-                    _passFailures++;
-                    _passCooldownUntil = DateTime.UtcNow.AddSeconds(_passFailures >= 3 ? 30.0 : 6.0);
-                }
-                else _passFailures = 0;
-                IssueTask(v);
-            }
-            return;
-        }
-
-        // segment advance: near the target, past it, or the 4 s heartbeat
-        float segDist = _segTarget == Vector3.Zero ? float.MaxValue : v.Position.DistanceTo(_segTarget);
-        bool passed = segDist < 80.0f &&
-            Vector3.Dot((_segTarget - v.Position).Normalized, v.ForwardVector) < -0.2f;
-        bool beat = (DateTime.UtcNow - _lastSegTask).TotalSeconds > 4.0;
-        if ((segDist < 45.0f || passed || beat) &&
-            (DateTime.UtcNow - _lastSegTask).TotalSeconds >= 2.0)
-        {
-            IssueTask(v);
-            return;
-        }
-
-        if (_overtake && !_segDirect && v.Speed < _speeds[_tier] * 0.70f)
-        {
-            TryOvertake(v);
+            Log("re-task: destination moved");
+            TaskTo();
         }
     }
 
-    Vector3 SampleRoute(float distance)
-    {
-        OutputArgument pos = new OutputArgument();
-        if (Function.Call<bool>((Hash)POS_ALONG_ROUTE, pos, true, distance, _slot))
-        {
-            Vector3 p = pos.GetResult<Vector3>();
-            if (p != Vector3.Zero) return p;
-        }
-        return Vector3.Zero;
-    }
-
-    // One task issuance: prefer the on-line sample at a speed-scaled lookahead
-    // (capped by remaining route length so the final sample converges on the
-    // destination), fall back to the v5 destination task when no route exists.
-    void IssueTask(Vehicle v)
+    // One long-range task to the destination. Nothing else touches the
+    // driving — no speed interference, no re-issues, no route surgery.
+    void TaskTo()
     {
         Vector3 raw = WaypointPos();
         if (raw == Vector3.Zero)
@@ -262,107 +176,20 @@ public class SimpleAutoDrive : Script
             _target = raw;
         }
         _knownWaypoint = _target;
-        _passing = false;
-        _lastSegTask = DateTime.UtcNow;
 
         Ped driver = GetActiveDriver();
         if (driver == null || !driver.Exists()) { Stop(); return; }
-        Vehicle veh = driver.CurrentVehicle;
-        if (veh == null || !veh.Exists()) { Stop(); return; }
+        Vehicle v = driver.CurrentVehicle;
+        if (v == null || !v.Exists()) { Stop(); return; }
 
         Function.Call(Hash.SET_DRIVER_ABILITY, driver, 1.0f);
         Function.Call(Hash.SET_DRIVER_AGGRESSIVENESS, driver, 1.0f);
 
-        float speed = _speeds[_tier];
-        float lookahead = Math.Min(200.0f, Math.Max(80.0f, veh.Speed * 6.0f));
-        float routeLen = Function.Call<float>((Hash)ROUTE_LENGTH);
-        if (routeLen > 0.0f) lookahead = Math.Min(lookahead, routeLen);
+        Log("task: longrange " + (int)v.Position.DistanceTo(_target) +
+            "m slot " + _slot + " tier " + _tier);
 
-        // line-following is for player waypoints only (slot 0). The slot-1
-        // sampler is not the game's own plan for mission blips — it can
-        // hand back a "success" point on top of the car, which issued a
-        // drive task to a target 0 m away. Mission blips go straight to
-        // the long-range task, which routed them correctly for days.
-        Vector3 seg = Vector3.Zero;
-        if (_slot == 0)
-        {
-            seg = SampleRoute(lookahead);
-            if (seg != Vector3.Zero)
-            {
-                float d = veh.Position.DistanceTo(seg);
-                if (d < 20.0f)
-                {
-                    Log("task: degenerate route sample " + (int)d + "m, fallback");
-                    seg = Vector3.Zero;
-                }
-            }
-        }
-
-        if (seg == Vector3.Zero)
-        {
-            Log("task: fallback (no route sample, slot " + _slot + ")");
-            // no readable route — v5 fallback: snapped destination, plus the
-            // close-and-behind direct steer for turnarounds
-            float a = NoseAngle(veh, _target);
-            if (a > 100.0f && veh.Position.DistanceTo(_target) < 150.0f)
-            {
-                _segTarget = _target;
-                _segDirect = true;
-                Function.Call((Hash)DRIVE_TO_COORD, driver, veh,
-                    _target.X, _target.Y, _target.Z, speed, 1, veh.Model.Hash,
-                    _styles[_tier], 8.0f, 300.0f);
-                return;
-            }
-            OutputArgument snappedPos = new OutputArgument();
-            if (Function.Call<bool>(Hash.GET_CLOSEST_VEHICLE_NODE,
-                _target.X, _target.Y, _target.Z, snappedPos, 1, 3.0f, 0.0f))
-            {
-                seg = snappedPos.GetResult<Vector3>();
-            }
-            else
-            {
-                seg = _target;
-            }
-            _segTarget = seg;
-            _segDirect = false;
-            Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, driver, veh,
-                seg.X, seg.Y, seg.Z, speed, _styles[_tier], _stopRange);
-            return;
-        }
-
-        // route is readable — drive the line. A segment target behind the
-        // nose means the line itself is looping back: direct-steer it (the
-        // physical U-turn) instead of letting the pathfinder lap the block.
-        _segTarget = seg;
-        float angle = NoseAngle(veh, seg);
-        float segDist = veh.Position.DistanceTo(seg);
-
-        if (angle > 100.0f && segDist < 160.0f)
-        {
-            _segDirect = true;
-            Log("task: route direct-steer, angle " + (int)angle + " dist " + (int)segDist);
-            Function.Call((Hash)DRIVE_TO_COORD, driver, veh,
-                seg.X, seg.Y, seg.Z, speed, 1, veh.Model.Hash,
-                _styles[_tier], 8.0f, 300.0f);
-        }
-        else
-        {
-            _segDirect = false;
-            Log("task: route longrange " + (int)segDist + "m, slot " + _slot);
-            // small stopRange: the carrot is re-issued before it's reached, so
-            // the task must never enter its arrive-and-brake phase mid-route
-            Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, driver, veh,
-                seg.X, seg.Y, seg.Z, speed, _styles[_tier], 20.0f);
-        }
-    }
-
-    static float NoseAngle(Vehicle v, Vector3 to)
-    {
-        Vector3 dir = to - v.Position; dir.Z = 0f;
-        Vector3 fwd = v.ForwardVector; fwd.Z = 0f;
-        if (dir.LengthSquared() < 1f || fwd.LengthSquared() < 0.01f) return 0f;
-        float dot = Math.Max(-1f, Math.Min(1f, Vector3.Dot(dir.Normalized, fwd.Normalized)));
-        return (float)(Math.Acos(dot) * 180.0 / Math.PI);
+        Function.Call(Hash.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE, driver, v,
+            _target.X, _target.Y, _target.Z, _speeds[_tier], _styles[_tier], _stopRange);
     }
 
     Vehicle GetActiveVehicle()
@@ -371,54 +198,6 @@ public class SimpleAutoDrive : Script
             return _driver.CurrentVehicle;
         Ped p = Game.Player.Character;
         return p != null ? p.CurrentVehicle : null;
-    }
-
-    void TryOvertake(Vehicle v)
-    {
-        Vehicle blocker = null;
-        float best = 30.0f;
-        Vector3 fwd = v.ForwardVector;
-
-        foreach (Vehicle other in World.GetNearbyVehicles(v.Position, 35.0f))
-        {
-            if (other == null || !other.Exists() || other.Handle == v.Handle) continue;
-            Vector3 rel = other.Position - v.Position;
-            float bdist = rel.Length();
-            if (bdist > 30.0f || bdist < 3.0f) continue;
-            if (Vector3.Dot(rel.Normalized, fwd) < 0.7f) continue;
-            if (Vector3.Dot(other.ForwardVector, fwd) < 0.6f) continue;
-            if (other.Speed > v.Speed + 2.0f) continue;
-            if (bdist < best) { best = bdist; blocker = other; }
-        }
-
-        if (blocker == null) return;
-        if (DateTime.UtcNow < _passCooldownUntil) return;
-
-        Vector3 right = Vector3.Cross(fwd, Vector3.WorldUp).Normalized;
-        _passTarget = blocker.Position + blocker.ForwardVector.Normalized * 35.0f - right * 3.2f;
-        Vector3 corridorDir = (_passTarget - v.Position).Normalized;
-        float corridorLength = v.Position.DistanceTo(_passTarget);
-
-        foreach (Vehicle other2 in World.GetNearbyVehicles(_passTarget, corridorLength + 30.0f))
-        {
-            if (other2 == null || !other2.Exists() || other2.Handle == v.Handle) continue;
-            if (Vector3.Dot(other2.ForwardVector, fwd) > -0.3f) continue;
-            Vector3 toOther = other2.Position - v.Position;
-            float along = Vector3.Dot(toOther, corridorDir);
-            if (along < 0f || along > corridorLength + 25.0f) continue;
-            float lateral = (toOther - corridorDir * along).Length();
-            if (lateral < 3.5f) return;
-        }
-
-        Ped driver = GetActiveDriver();
-        if (driver == null || !driver.Exists()) return;
-
-        _passing = true;
-        _passStart = DateTime.UtcNow;
-        Function.Call((Hash)DRIVE_TO_COORD, driver, v,
-            _passTarget.X, _passTarget.Y, _passTarget.Z,
-            Math.Min(_speeds[_tier], 20.0f), 1, v.Model.Hash,
-            1074528805, 2.5f, 60.0f);
     }
 
     void OnAborted(object sender, EventArgs e)
@@ -445,15 +224,13 @@ public class SimpleAutoDrive : Script
             }
 
             _on = true;
-            _segTarget = Vector3.Zero;
-            _segDirect = false;
             _startedAt = DateTime.UtcNow;
 
             if (_chauffeurMode)
                 StartChauffeur(p, v);
 
             GTA.UI.Screen.ShowSubtitle("~g~AutoDrive ON~w~ - " + TierLabel(), 1500);
-            IssueTask(v);
+            TaskTo();
         }
         else
         {
@@ -465,8 +242,7 @@ public class SimpleAutoDrive : Script
     void StartChauffeur(Ped player, Vehicle vehicle)
     {
         // seat the player somewhere that isn't the driver seat — some
-        // vehicles (garbage/service trucks) have no passenger seat at all,
-        // and warping to a nonexistent seat ejects the player to the street
+        // vehicles (garbage/service trucks) have no passenger seat at all
         VehicleSeat seat = VehicleSeat.None;
         if (vehicle.IsSeatFree(VehicleSeat.Passenger)) seat = VehicleSeat.Passenger;
         else if (vehicle.IsSeatFree(VehicleSeat.LeftRear)) seat = VehicleSeat.LeftRear;
@@ -500,9 +276,6 @@ public class SimpleAutoDrive : Script
             GTA.UI.Screen.ShowSubtitle("~y~Chauffeur failed, player-drive mode", 1500);
             return;
         }
-        Log("chauffeur: npc up, player seat " +
-            (player.CurrentVehicle != null ? player.CurrentVehicle.Handle.ToString() : "none") +
-            " veh " + vehicle.Handle.ToString());
 
         _driver.IsPersistent = true;
         _driver.BlockPermanentEvents = true;
@@ -515,6 +288,7 @@ public class SimpleAutoDrive : Script
         Function.Call(Hash.SET_ENTITY_VISIBLE, _driver, false);
         Function.Call(Hash.SET_DRIVER_ABILITY, _driver, 1.0f);
         Function.Call(Hash.SET_DRIVER_AGGRESSIVENESS, _driver, 1.0f);
+        Log("chauffeur: npc up");
     }
 
     void CycleTier()
@@ -522,8 +296,7 @@ public class SimpleAutoDrive : Script
         _tier = (_tier + 1) % 3;
         if (_on)
         {
-            Vehicle v = GetActiveVehicle();
-            if (v != null && v.Exists()) IssueTask(v);
+            TaskTo();
         }
         GTA.UI.Screen.ShowSubtitle("AutoDrive - " + TierLabel(), 1500);
     }
@@ -567,19 +340,14 @@ public class SimpleAutoDrive : Script
     {
         if (!_on) return;
         _on = false;
-        _passing = false;
-        _passFailures = 0;
-        _passCooldownUntil = DateTime.MinValue;
-        _segTarget = Vector3.Zero;
 
         Ped p = Game.Player.Character;
 
         if (_chauffeurMode && _driver != null && _driver.Exists())
         {
             Vehicle v = _driver.CurrentVehicle;
-            // delete the NPC first to free the driver seat, then warp player
-            // in — ONLY if they're actually in this car; never teleport a
-            // player who left the vehicle back into it
+            // delete the NPC first to free the driver seat, then warp the
+            // player in — ONLY if they're actually in this car
             _driver.Delete();
             _driver = null;
             if (v != null && v.Exists() && p != null && p.Exists() &&
