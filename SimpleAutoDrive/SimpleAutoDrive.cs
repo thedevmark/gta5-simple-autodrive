@@ -317,6 +317,14 @@ public class SimpleAutoDrive : Script
             needUTurn = ang > 120.0;
         }
 
+        // Max driver skill: the AI's routing prefers right turns and wide loops
+        // when driver ability is low (the default for the player ped who's
+        // normally manually controlled). At 1.0 it's willing to make left
+        // turns and tight maneuvers — the difference between "competent
+        // chauffeur" and "nervous learner circling the block."
+        Function.Call(Hash.SET_DRIVER_ABILITY, p, 1.0f);
+        Function.Call(Hash.SET_DRIVER_AGGRESSIVENESS, p, 1.0f);
+
         if (needUTurn)
         {
             Function.Call((Hash)0xE2A2AA2F659D77A7, p, v,
