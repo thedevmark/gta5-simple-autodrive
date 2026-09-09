@@ -5,7 +5,7 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 
-// SimpleAutoDrive v6.0.3 — GPS line follower.
+// SimpleAutoDrive v6.0.4 — GPS line follower.
 //
 // The v1-v5 chauffeur handed the destination to the engine's drive task and
 // accepted whatever route the task's own pathfinder invented — which is not
@@ -223,7 +223,8 @@ public class SimpleAutoDrive : Script
         bool passed = segDist < 80.0f &&
             Vector3.Dot((_segTarget - v.Position).Normalized, v.ForwardVector) < -0.2f;
         bool beat = (DateTime.UtcNow - _lastSegTask).TotalSeconds > 4.0;
-        if (segDist < 45.0f || passed || beat)
+        if ((segDist < 45.0f || passed || beat) &&
+            (DateTime.UtcNow - _lastSegTask).TotalSeconds >= 2.0)
         {
             IssueTask(v);
             return;
@@ -277,7 +278,25 @@ public class SimpleAutoDrive : Script
         float routeLen = Function.Call<float>((Hash)ROUTE_LENGTH);
         if (routeLen > 0.0f) lookahead = Math.Min(lookahead, routeLen);
 
-        Vector3 seg = SampleRoute(lookahead);
+        // line-following is for player waypoints only (slot 0). The slot-1
+        // sampler is not the game's own plan for mission blips — it can
+        // hand back a "success" point on top of the car, which issued a
+        // drive task to a target 0 m away. Mission blips go straight to
+        // the long-range task, which routed them correctly for days.
+        Vector3 seg = Vector3.Zero;
+        if (_slot == 0)
+        {
+            seg = SampleRoute(lookahead);
+            if (seg != Vector3.Zero)
+            {
+                float d = veh.Position.DistanceTo(seg);
+                if (d < 20.0f)
+                {
+                    Log("task: degenerate route sample " + (int)d + "m, fallback");
+                    seg = Vector3.Zero;
+                }
+            }
+        }
 
         if (seg == Vector3.Zero)
         {
