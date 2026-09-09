@@ -178,7 +178,7 @@ public class SimpleAutoDrive : Script
         }
 
         // ---- continuous speed control: no replans, just breathing ----
-        if (!_passing && (DateTime.UtcNow - _lastSpeedUpdate).TotalMilliseconds >= 500)
+        if (!_passing && (DateTime.UtcNow - _lastSpeedUpdate).TotalMilliseconds >= 250)
         {
             _lastSpeedUpdate = DateTime.UtcNow;
             Function.Call(Hash.SET_DRIVE_TASK_MAX_CRUISE_SPEED, p, DesiredSpeed(v, dist), 1);
@@ -364,8 +364,10 @@ public class SimpleAutoDrive : Script
         // curving road to a crawl. Just give it the tier ceiling.
         float s = _speeds[_tier];
 
-        // Hard cap: the GTA driving AI cannot steer reliably above 30 m/s.
-        if (s > 30.0f) s = 30.0f;
+        // 34 m/s (~122 km/h): the AI can handle this with the turn-aware
+        // speed removed (the task manages its own cornering). 36+ was
+        // crashing into walls; 30 felt slow. This is the compromise.
+        if (s > 34.0f) s = 34.0f;
         return s;
     }
 
