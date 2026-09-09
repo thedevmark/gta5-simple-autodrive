@@ -58,7 +58,7 @@ public class SimpleAutoDrive : Script
         _styles[2] = cfg.GetValue("MAIN", "StyleHurried", 1074528805);
         _tier = cfg.GetValue("MAIN", "DefaultTier", 2);
         if (_tier < 0 || _tier > 2) _tier = 2;
-        _stopRange = cfg.GetValue("MAIN", "StopRange", 15.0f);
+        _stopRange = cfg.GetValue("MAIN", "StopRange", 35.0f);
         _overtake = cfg.GetValue("MAIN", "Overtake", 1) == 1;
 
         cfg.SetValue("MAIN", "ToggleKey", _toggle.ToString());
@@ -345,6 +345,15 @@ public class SimpleAutoDrive : Script
         {
             _target = t;
         }
+        // Snap target to nearest road node: waypoints can be inside buildings,
+        // on sidewalks, in parking lots. The AI needs a road-reachable point.
+        OutputArgument snappedPos = new OutputArgument();
+        if (Function.Call<bool>(Hash.GET_CLOSEST_VEHICLE_NODE,
+            _target.X, _target.Y, _target.Z, snappedPos, 1, 3.0f, 0.0f))
+        {
+            _target = snappedPos.GetResult<Vector3>();
+        }
+
         _knownWaypoint = _target;
         _passing = false;
 
